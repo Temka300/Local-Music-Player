@@ -1,0 +1,174 @@
+# Music Player Project .gitignore
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+py311venv/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.spyderproject
+.spyproject
+.ropeproject
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Music library database (contains user data)
+music_library.db
+music_library.db-journal
+
+# Music files folder (contains user's music collection)
+musics/
+music/
+audio/
+
+# User settings and preferences
+library_settings.json
+settings.json
+config.json
+user_preferences.json
+
+# Unnecessary python files
+test_table_styling.py
+local_spotify_tk.py
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Log files
+*.log
+logs/
+
+# Audio conversion temporary files
+*.temp.wav
+*.temp.mp3
+temp_audio_*
+
+# Album art cache
+album_art_cache/
+*.album_art
+
+# Backup files
+*.bak
+*.backup
+*_backup.*
+*_old.*
+
+# Windows executable files (if you compile the app)
+*.exe
+*.msi
+
+# macOS app bundles (if you package for macOS)
+*.app
+*.dmg
+
+# Linux packages (if you package for Linux)
+*.deb
+*.rpm
+*.tar.gz
+*.snap
+*.appimage
+
+# Documentation build files (if you add docs)
+docs/_build/
+site/
+
+# Jupyter Notebook checkpoints (if you add any notebooks)
+.ipynb_checkpoints
+
+# PyCharm specific
+.idea/
+
+# Local test files
+test_files/
+test_music/
+sample_music/
+
+# Environment variables
+.env.local
+.env.production
+
+# Package lock files (optional - you might want to include these)
+# Pipfile.lock
+# poetry.lock
+
+# Node modules (if you add any web components)
+node_modules/
+
+# Compiled translations (if you add internationalization)
+*.mo
+
+# Local database snapshots
+*.sql
+*.sqlite
+*.sqlite3
+*.db3
+
+# Runtime created folders
+cache/
+.cache/

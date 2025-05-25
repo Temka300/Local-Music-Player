@@ -1,0 +1,30 @@
+# 🎵 Local Spotify - Music Player Requirements
+# Install with: pip install -r requirements.txt
+
+# Audio playback
+pygame>=2.5.0
+
+# Metadata extraction
+mutagen>=1.47.0
+
+# Image processing for album art
+Pillow>=10.0.0
+
+# Audio conversion for M4A support
+pydub>=0.25.1
+
+# File management and organization
+# shutil is part of Python standard library
+
+# GUI frameworks
+# tkinter is included with Python
+PyQt5>=5.15.0
+
+# Additional PyQt5 multimedia components
+PyQt5-Qt5>=5.15.0
+
+# Database (sqlite3 is included with Python)
+
+# Additional audio format support (optional)
+# pydub>=0.25.1  # For additional audio format conversion
+# ffmpeg-python>=0.2.0  # For advanced audio processing
