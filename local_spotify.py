@@ -855,6 +855,7 @@ class LocalSpotifyQt(QMainWindow):
         # Setup UI FIRST
         self.setup_ui()
         self.setup_connections()
+        self.setup_keyboard_shortcuts()  # Add this line
         self.apply_dark_theme()
         
         # THEN do cleanup and data loading (after UI exists)
@@ -2371,53 +2372,430 @@ class LocalSpotifyQt(QMainWindow):
             self.music_table.setItem(row, 3, duration_item)
 
     # Player control methods (note the proper indentation - these are part of the LocalSpotifyQt class)
+    # Enhanced Player control methods with improved functionality
     def toggle_play_pause(self):
-        """Toggle play/pause"""
-        if self.player.is_playing():
-            self.player.pause()
-            self.play_pause_btn.setText("▶")
-        elif self.player.is_paused():
-            self.player.play()
-            self.play_pause_btn.setText("⏸")
-        else:
-            # No song loaded, play first song in library if available
-            if self.music_table.rowCount() > 0:
-                self.on_song_double_click(0, 0)
+        """Enhanced toggle play/pause with better state management"""
+        try:
+            if self.player.is_playing():
+                self.player.pause()
+                self.play_pause_btn.setText("▶")
+                self.statusBar().showMessage("⏸️ Paused", 1500)
+                
+                # Visual feedback for pause
+                self.play_pause_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #404040;
+                        border: none;
+                        border-radius: 30px;
+                        font-size: 24px;
+                        color: #FFFFFF;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #1DB954;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """)
+                
+            elif self.player.is_paused():
+                self.player.play()
+                self.play_pause_btn.setText("⏸")
+                self.statusBar().showMessage("▶️ Resumed", 1500)
+                
+                # Visual feedback for play
+                self.play_pause_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1DB954;
+                        border: none;
+                        border-radius: 30px;
+                        font-size: 24px;
+                        color: #FFFFFF;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #1ED760;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """)
+                
+            else:
+                # No song loaded or stopped, play first available song
+                if self.current_song_data:
+                    # Resume current song
+                    self.play_song(self.current_song_data)
+                elif self.music_table.rowCount() > 0:
+                    # Play first song in current view
+                    self.on_song_double_click(0, 0)
+                    self.statusBar().showMessage("▶️ Playing first song", 2000)
+                else:
+                    self.statusBar().showMessage("No songs available to play", 2000)
+                    
+        except Exception as e:
+            print(f"Error in toggle_play_pause: {e}")
+            self.statusBar().showMessage("❌ Playback error", 2000)
 
     def next_song(self):
-        """Play next song"""
-        # Implementation for next song
-        pass
+        """Enhanced next song with playlist and shuffle support"""
+        try:
+            current_songs = self.get_current_song_list()
+            if not current_songs:
+                self.statusBar().showMessage("No songs in current view", 2000)
+                return
+            
+            current_index = self.find_current_song_index(current_songs)
+            
+            if current_index is not None:
+                if self.shuffle_mode:
+                    # Random next song (excluding current)
+                    available_indices = [i for i in range(len(current_songs)) if i != current_index]
+                    if available_indices:
+                        next_index = random.choice(available_indices)
+                    else:
+                        next_index = 0
+                else:
+                    # Sequential next song
+                    next_index = (current_index + 1) % len(current_songs)
+                
+                # Check repeat mode
+                if current_index == len(current_songs) - 1 and self.repeat_mode == "off" and not self.shuffle_mode:
+                    self.player.stop()
+                    self.statusBar().showMessage("🏁 End of playlist", 2000)
+                    return
+                
+                next_song = current_songs[next_index]
+                self.play_song(next_song)
+                self.update_table_selection(next_index)
+                
+                # Visual feedback
+                self.next_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1DB954;
+                        border: none;
+                        border-radius: 22px;
+                        font-size: 18px;
+                        color: #FFFFFF;
+                    }
+                    QPushButton:hover {
+                        background-color: #1DB954;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """)
+                
+                # Reset button style after animation
+                QTimer.singleShot(200, lambda: self.next_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #404040;
+                        border: none;
+                        border-radius: 22px;
+                        font-size: 18px;
+                        color: #FFFFFF;
+                    }
+                    QPushButton:hover {
+                        background-color: #1DB954;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """))
+                
+            else:
+                # No current song, play first
+                if current_songs:
+                    self.play_song(current_songs[0])
+                    self.update_table_selection(0)
+                    
+        except Exception as e:
+            print(f"Error in next_song: {e}")
+            self.statusBar().showMessage("❌ Error playing next song", 2000)
 
     def previous_song(self):
-        """Play previous song"""
-        # Implementation for previous song
-        pass
+        """Enhanced previous song with playlist support"""
+        try:
+            current_songs = self.get_current_song_list()
+            if not current_songs:
+                self.statusBar().showMessage("No songs in current view", 2000)
+                return
+            
+            current_index = self.find_current_song_index(current_songs)
+            
+            if current_index is not None:
+                if self.shuffle_mode:
+                    # Random previous song (excluding current)
+                    available_indices = [i for i in range(len(current_songs)) if i != current_index]
+                    if available_indices:
+                        prev_index = random.choice(available_indices)
+                    else:
+                        prev_index = len(current_songs) - 1
+                else:
+                    # Sequential previous song
+                    prev_index = (current_index - 1) % len(current_songs)
+                
+                prev_song = current_songs[prev_index]
+                self.play_song(prev_song)
+                self.update_table_selection(prev_index)
+                
+                # Visual feedback
+                self.prev_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1DB954;
+                        border: none;
+                        border-radius: 22px;
+                        font-size: 18px;
+                        color: #FFFFFF;
+                    }
+                    QPushButton:hover {
+                        background-color: #1DB954;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """)
+                
+                # Reset button style after animation
+                QTimer.singleShot(200, lambda: self.prev_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #404040;
+                        border: none;
+                        border-radius: 22px;
+                        font-size: 18px;
+                        color: #FFFFFF;
+                    }
+                    QPushButton:hover {
+                        background-color: #1DB954;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """))
+                
+            else:
+                # No current song, play last
+                if current_songs:
+                    self.play_song(current_songs[-1])
+                    self.update_table_selection(len(current_songs) - 1)
+                    
+        except Exception as e:
+            print(f"Error in previous_song: {e}")
+            self.statusBar().showMessage("❌ Error playing previous song", 2000)
 
     def toggle_shuffle(self):
-        """Toggle shuffle mode"""
+        """Enhanced shuffle mode with visual feedback and smart playlist handling"""
         self.shuffle_mode = not self.shuffle_mode
+        
         if self.shuffle_mode:
-            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("#404040", "#1DB954"))
+            # Enable shuffle
+            self.shuffle_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1DB954;
+                    border: none;
+                    border-radius: 20px;
+                    font-size: 16px;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #1ED760;
+                }
+                QPushButton:pressed {
+                    background-color: #169C46;
+                }
+            """)
+            self.shuffle_btn.setToolTip("Shuffle: ON - Songs will play in random order")
+            self.statusBar().showMessage("🔀 Shuffle enabled", 2000)
+            
+            # Create shuffled playlist
+            self.create_shuffled_playlist()
+            
         else:
-            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("#1DB954", "#404040"))
+            # Disable shuffle
+            self.shuffle_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #404040;
+                    border: none;
+                    border-radius: 20px;
+                    font-size: 16px;
+                    color: #FFFFFF;
+                }
+                QPushButton:hover {
+                    background-color: #1DB954;
+                }
+                QPushButton:pressed {
+                    background-color: #169C46;
+                }
+            """)
+            self.shuffle_btn.setToolTip("Shuffle: OFF - Songs will play in order")
+            self.statusBar().showMessage("📄 Shuffle disabled", 2000)
 
     def toggle_repeat(self):
-        """Toggle repeat mode"""
+        """Enhanced repeat mode with three states and visual feedback"""
         modes = ["off", "one", "all"]
         current_index = modes.index(self.repeat_mode)
         self.repeat_mode = modes[(current_index + 1) % len(modes)]
         
         if self.repeat_mode == "off":
+            # No repeat
             self.repeat_btn.setText("🔁")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#1DB954", "#404040"))
+            self.repeat_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #404040;
+                    border: none;
+                    border-radius: 20px;
+                    font-size: 16px;
+                    color: #FFFFFF;
+                }
+                QPushButton:hover {
+                    background-color: #1DB954;
+                }
+                QPushButton:pressed {
+                    background-color: #169C46;
+                }
+            """)
+            self.repeat_btn.setToolTip("Repeat: OFF")
+            self.statusBar().showMessage("🔁 Repeat disabled", 2000)
+            
         elif self.repeat_mode == "one":
+            # Repeat current song
             self.repeat_btn.setText("🔂")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#404040", "#1DB954"))
+            self.repeat_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1DB954;
+                    border: none;
+                    border-radius: 20px;
+                    font-size: 16px;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #1ED760;
+                }
+                QPushButton:pressed {
+                    background-color: #169C46;
+                }
+            """)
+            self.repeat_btn.setToolTip("Repeat: ONE - Current song will repeat")
+            self.statusBar().showMessage("🔂 Repeat current song", 2000)
+            
         else:  # all
+            # Repeat all songs
             self.repeat_btn.setText("🔁")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#404040", "#1DB954"))
+            self.repeat_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #E67E22;
+                    border: none;
+                    border-radius: 20px;
+                    font-size: 16px;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #D35400;
+                }
+                QPushButton:pressed {
+                    background-color: #A04000;
+                }
+            """)
+            self.repeat_btn.setToolTip("Repeat: ALL - Playlist will repeat")
+            self.statusBar().showMessage("🔁 Repeat all songs", 2000)
 
+    # Helper methods for enhanced functionality
+    def get_current_song_list(self):
+        """Get the current list of songs being displayed"""
+        songs = []
+        for row in range(self.music_table.rowCount()):
+            song_id = self.music_table.item(row, 0).data(Qt.UserRole)
+            # Find song in database
+            all_songs = self.db.get_all_songs()
+            for song in all_songs:
+                if song[0] == song_id:
+                    songs.append(song)
+                    break
+        return songs
+
+    def find_current_song_index(self, song_list):
+        """Find the index of the currently playing song"""
+        if not self.current_song_data or not song_list:
+            return None
+        
+        current_song_id = self.current_song_data[0]
+        for i, song in enumerate(song_list):
+            if song[0] == current_song_id:
+                return i
+        return None
+    
+    def update_table_selection(self, index):
+        """Update table selection to show currently playing song"""
+        if 0 <= index < self.music_table.rowCount():
+            self.music_table.selectRow(index)
+            self.music_table.scrollToItem(self.music_table.item(index, 0))
+
+    def create_shuffled_playlist(self):
+        """Create a shuffled version of current playlist"""
+        if hasattr(self, 'original_playlist_order'):
+            # Store original order if not already stored
+            if not self.original_playlist_order:
+                self.original_playlist_order = self.get_current_song_list()
+        
+        # Create shuffled order
+        current_songs = self.get_current_song_list()
+        if current_songs:
+            self.shuffled_playlist_order = current_songs.copy()
+            random.shuffle(self.shuffled_playlist_order)
+
+    def on_song_end(self):
+        """Handle what happens when a song ends"""
+        try:
+            if self.repeat_mode == "one":
+                # Repeat current song
+                if self.current_song_data:
+                    self.play_song(self.current_song_data)
+                    self.statusBar().showMessage("🔂 Repeating song", 1500)
+            else:
+                # Move to next song
+                self.next_song()
+                
+        except Exception as e:
+            print(f"Error in on_song_end: {e}")
+
+    # Enhanced keyboard shortcuts (add this to setup_connections or create a new method)
+    def setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for player controls"""
+        # Spacebar for play/pause
+        play_pause_shortcut = QShortcut(Qt.Key_Space, self)
+        play_pause_shortcut.activated.connect(self.toggle_play_pause)
+        
+        # Arrow keys for next/previous
+        next_shortcut = QShortcut(Qt.Key_Right, self)
+        next_shortcut.activated.connect(self.next_song)
+        
+        prev_shortcut = QShortcut(Qt.Key_Left, self)
+        prev_shortcut.activated.connect(self.previous_song)
+        
+        # S for shuffle
+        shuffle_shortcut = QShortcut(QKeySequence("S"), self)
+        shuffle_shortcut.activated.connect(self.toggle_shuffle)
+        
+        # R for repeat
+        repeat_shortcut = QShortcut(QKeySequence("R"), self)
+        repeat_shortcut.activated.connect(self.toggle_repeat)
+        
+        # Volume shortcuts
+        volume_up_shortcut = QShortcut(Qt.Key_Up, self)
+        volume_up_shortcut.activated.connect(lambda: self.increase_volume(10))
+        
+        volume_down_shortcut = QShortcut(Qt.Key_Down, self)
+        volume_down_shortcut.activated.connect(lambda: self.decrease_volume(10))
+        
+        # M for mute
+        mute_shortcut = QShortcut(QKeySequence("M"), self)
+        mute_shortcut.activated.connect(self.toggle_mute)
+
+# TODO: Improvee Update Position and Duration methods
     def update_position(self, position):
         """Update position display"""
         if not self.slider_pressed:
@@ -2429,18 +2807,39 @@ class LocalSpotifyQt(QMainWindow):
         self.progress_slider.setRange(0, duration)
         self.duration_label.setText(self.format_duration(duration / 1000))
 
+    # Update the on_player_state_changed method to handle song endings
     def on_player_state_changed(self, state):
-        """Handle player state changes (VLC version)"""
+        """Enhanced player state change handling"""
         if VLC_AVAILABLE:
-            # VLC states: 0=Stopped, 1=Playing, 2=Paused
+            # VLC states: 0=Stopped, 1=Playing, 2=Paused, 6=Ended
             if state == 1:  # Playing
                 self.play_pause_btn.setText("⏸")
+                self.play_pause_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1DB954;
+                        border: none;
+                        border-radius: 30px;
+                        font-size: 24px;
+                        color: #FFFFFF;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #1ED760;
+                    }
+                    QPushButton:pressed {
+                        background-color: #169C46;
+                    }
+                """)
+            elif state == 6:  # Ended
+                self.on_song_end()
             else:  # Stopped or Paused
                 self.play_pause_btn.setText("▶")
         else:
             # Qt MediaPlayer states (fallback)
             if state == QMediaPlayer.PlayingState:
                 self.play_pause_btn.setText("⏸")
+            elif state == QMediaPlayer.EndOfMedia:
+                self.on_song_end()
             else:
                 self.play_pause_btn.setText("▶")
 
