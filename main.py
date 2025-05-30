@@ -20,9 +20,8 @@ def main():
     try:
         # Create QApplication instance
         app = QApplication(sys.argv)
-        app.setApplicationName("Local Spotify Qt")
-        app.setApplicationVersion("2.0")
-        app.setOrganizationName("Local Music Player")
+        app.setApplicationName("Local Spotify")
+        app.setApplicationVersion("1.01")
         
         # Create and show main window
         window = LocalSpotifyQt()

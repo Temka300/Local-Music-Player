@@ -5,7 +5,7 @@ Simple launcher for the modular Local Spotify Qt application
 
 import sys
 import os
-import main
+from main import main
 # Add the current directory to Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)

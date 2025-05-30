@@ -32,9 +32,8 @@ REPEAT_ONE = "one"
 REPEAT_ALL = "all"
 
 # Application info
-APP_NAME = "Local Spotify Qt"
-APP_VERSION = "1.0"
-APP_ORGANIZATION = "Local Music Player"
+APP_NAME = "Local Spotify"
+APP_VERSION = "1.01"
 
 # Default settings
 DEFAULT_SETTINGS = {
