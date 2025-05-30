@@ -21,7 +21,7 @@ def main():
         # Create QApplication instance
         app = QApplication(sys.argv)
         app.setApplicationName("Local Spotify")
-        app.setApplicationVersion("1.01")
+        app.setApplicationVersion("1.10")
         
         # Create and show main window
         window = LocalSpotifyQt()

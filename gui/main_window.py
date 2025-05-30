@@ -46,15 +46,17 @@ class LocalSpotifyQt(QMainWindow):
         self.current_playlist = []
         self.current_index = 0
         self.shuffle_mode = False
-        self.repeat_mode = "off"  # off, one, all
+        self.shuffled_playlist = []
+        self.shuffle_index = 0
+        self.repeat_mode = "off"  # Can be "off", "one", "all"
         self.current_song_data = None
         self.slider_pressed = False
-        self.original_playlist_order = []  # Store original order for shuffle toggle
-        self.shuffled_playlist_order = []  # Store shuffled order
+        self.original_playlist_order = []
+        self.shuffled_playlist_order = []
         
         # Setup UI FIRST
         self.setup_ui()
-        self.setup_connections()
+        self.setup_connections()  # This already connects all audio player signals
         self.setup_keyboard_shortcuts()
         apply_dark_theme(self)
         
@@ -65,23 +67,39 @@ class LocalSpotifyQt(QMainWindow):
         # Load initial data
         self.refresh_library()
         self.refresh_playlists()
+        
+        # Initialize repeat mode
+        self.repeat_mode = "off"  # Can be "off", "one", "all"
     
     def setup_ui(self):
         """Setup the user interface"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
+        # Main layout - VERTICAL to stack content and player controls
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Content area layout
+        content_layout = QHBoxLayout()
         
         # Left sidebar
-        self.create_sidebar(main_layout)
+        self.create_sidebar(content_layout)
         
         # Right content area
-        self.create_content_area(main_layout)
+        self.create_content_area(content_layout)
+        
+        # Create a widget for the content area
+        content_widget = QWidget()
+        content_widget.setLayout(content_layout)
         
         # Bottom player controls
-        self.create_player_controls()
+        player_controls = self.create_player_controls()
+        
+        # Add content and player controls to main layout
+        main_layout.addWidget(content_widget)
+        main_layout.addWidget(player_controls)  # This was missing!
         
         # Menu bar
         self.create_menu_bar()
@@ -203,94 +221,175 @@ class LocalSpotifyQt(QMainWindow):
         quick_files_btn.clicked.connect(self.add_files)
     
     def create_player_controls(self):
-        """Create the bottom player controls"""
-        player_dock = QDockWidget("Player Controls", self)
-        player_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
-        
+        """Create the bottom player controls with centered layout"""
+        # Main player container
         player_widget = QWidget()
-        player_widget.setFixedHeight(120)
-        player_layout = QHBoxLayout(player_widget)
-        player_layout.setContentsMargins(20, 10, 20, 10)
-        
-        # Left: Song info and album art
-        left_layout = QVBoxLayout()
-        left_layout.setAlignment(Qt.AlignLeft | Qt.AlignCenter)
-        
-        self.album_art_label = QLabel()
-        self.album_art_label.setFixedSize(64, 64)
-        self.album_art_label.setAlignment(Qt.AlignCenter)
-        self.album_art_label.setText("♪")
-        self.album_art_label.setStyleSheet("""
-            QLabel {
-                background-color: #404040;
-                border-radius: 5px;
-                font-size: 24px;
-                color: #1DB954;
+        player_widget.setFixedHeight(100)
+        player_widget.setStyleSheet("""
+            QWidget {
+                background-color: #181818;
+                border-top: 1px solid #333;
             }
         """)
         
-        song_info_layout = QHBoxLayout()
-        song_info_layout.addWidget(self.album_art_label)
+        # Main horizontal layout
+        main_layout = QHBoxLayout(player_widget)
+        main_layout.setContentsMargins(15, 10, 15, 10)
+        main_layout.setSpacing(20)
         
-        # Song text info
-        text_info_layout = QVBoxLayout()
-        text_info_layout.setContentsMargins(10, 0, 0, 0)
+        # === LEFT SECTION: Song Info ===
+        left_section = QWidget()
+        left_section.setFixedWidth(250)
+        left_layout = QHBoxLayout(left_section)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
         
-        self.current_title_label = QLabel("No song selected")
-        self.current_title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        # Song title
+        self.current_song_label = QLabel("No song playing")
+        self.current_song_label.setStyleSheet("color: #FFFFFF; font-size: 14px; font-weight: bold;")
+        
+        # Artist info
         self.current_artist_label = QLabel("")
         self.current_artist_label.setStyleSheet("color: #B3B3B3; font-size: 12px;")
         
-        text_info_layout.addWidget(self.current_title_label)
-        text_info_layout.addWidget(self.current_artist_label)
+        song_info_layout = QVBoxLayout()
+        song_info_layout.addWidget(self.current_song_label)
+        song_info_layout.addWidget(self.current_artist_label)
         
-        song_info_layout.addLayout(text_info_layout)
         left_layout.addLayout(song_info_layout)
+        left_layout.addStretch()
         
-        player_layout.addLayout(left_layout)
+        # === CENTER SECTION: Controls ===
+        center_section = QWidget()
+        center_section.setFixedWidth(400)
+        center_layout = QVBoxLayout(center_section)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(8)
         
-        # Center: Player controls
-        center_layout = QVBoxLayout()
-        center_layout.setAlignment(Qt.AlignCenter)
-        
-        # Control buttons
+        # Control buttons row
         controls_layout = QHBoxLayout()
-        controls_layout.setAlignment(Qt.AlignCenter)
+        controls_layout.setSpacing(15)
         
+        # Create control buttons
         self.shuffle_btn = QPushButton("🔀")
         self.previous_btn = QPushButton("⏮")
         self.play_pause_btn = QPushButton("▶")
         self.next_btn = QPushButton("⏭")
-        self.repeat_btn = QPushButton("🔁")
+        self.repeat_btn = QPushButton("↪️")
         
-        # Style buttons
-        for btn in [self.shuffle_btn, self.previous_btn, self.play_pause_btn, self.next_btn, self.repeat_btn]:
-            btn.setFixedSize(40, 40)
-            btn.setStyleSheet("""
-                QPushButton {
-                    border: none;
-                    border-radius: 20px;
-                    background-color: #404040;
-                    color: white;
-                    font-size: 16px;
-                }
-                QPushButton:hover {
-                    background-color: #505050;
-                }
-                QPushButton:pressed {
-                    background-color: #303030;
-                }
-            """)
+        # UNIFIED STYLE - All buttons start grey
+        self.apply_grey_button_style(self.shuffle_btn)
+        self.apply_grey_button_style(self.previous_btn)
+        self.apply_grey_button_style(self.next_btn)
+        self.apply_grey_button_style(self.repeat_btn)
+        self.apply_grey_button_style(self.play_pause_btn)  # Play button also starts grey
         
-        # Make play button larger and green
-        self.play_pause_btn.setFixedSize(50, 50)
-        self.play_pause_btn.setStyleSheet("""
+        # Add buttons to controls layout
+        controls_layout.addStretch()
+        controls_layout.addWidget(self.shuffle_btn)
+        controls_layout.addWidget(self.previous_btn)
+        controls_layout.addWidget(self.play_pause_btn)
+        controls_layout.addWidget(self.next_btn)
+        controls_layout.addWidget(self.repeat_btn)
+        controls_layout.addStretch()
+        
+        # Progress bar section
+        progress_layout = QHBoxLayout()
+        progress_layout.setSpacing(8)
+        
+        # Current time
+        self.current_time_label = QLabel("0:00")
+        self.current_time_label.setStyleSheet("color: #B3B3B3; font-size: 11px;")
+        
+        # Progress slider
+        self.position_slider = QSlider(Qt.Horizontal)
+        self.position_slider.setStyleSheet("""
+            QSlider::groove:horizontal { height: 4px; background: #404040; border-radius: 2px; }
+            QSlider::handle:horizontal { background: #FFFFFF; width: 12px; height: 12px; border-radius: 6px; margin: -4px 0; }
+            QSlider::sub-page:horizontal { background: #1DB954; border-radius: 2px; }
+        """)
+        
+        # Total time
+        self.total_time_label = QLabel("0:00")
+        self.total_time_label.setStyleSheet("color: #B3B3B3; font-size: 11px;")
+        
+        progress_layout.addWidget(self.current_time_label)
+        progress_layout.addWidget(self.position_slider)
+        progress_layout.addWidget(self.total_time_label)
+        
+        center_layout.addLayout(controls_layout)
+        center_layout.addLayout(progress_layout)
+        
+        # === RIGHT SECTION: Volume ===
+        right_section = QWidget()
+        right_section.setFixedWidth(150)
+        right_layout = QHBoxLayout(right_section)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+        
+        # Mute button
+        self.mute_btn = QPushButton("🔊")
+        self.mute_btn.setFixedSize(32, 32)
+        self.apply_grey_button_style(self.mute_btn)
+        
+        # Volume slider
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setMaximum(100)
+        self.volume_slider.setValue(70)
+        self.volume_slider.setFixedWidth(80)
+        self.volume_slider.setStyleSheet("""
+            QSlider::groove:horizontal { height: 4px; background: #404040; border-radius: 2px; }
+            QSlider::handle:horizontal { background: #FFFFFF; width: 12px; height: 12px; border-radius: 6px; margin: -4px 0; }
+            QSlider::sub-page:horizontal { background: #FFFFFF; border-radius: 2px; }
+        """)
+        
+        right_layout.addStretch()
+        right_layout.addWidget(self.mute_btn)
+        right_layout.addWidget(self.volume_slider)
+        
+        # === ASSEMBLE ===
+        main_layout.addWidget(left_section)
+        main_layout.addWidget(center_section)
+        main_layout.addWidget(right_section)
+        
+        return player_widget
+
+    def apply_grey_button_style(self, button):
+        """Apply consistent grey button style"""
+        button.setStyleSheet("""
             QPushButton {
                 border: none;
-                border-radius: 25px;
+                border-radius: 20px;
+                background-color: transparent;
+                color: #808080;
+                font-size: 16px;
+                min-width: 32px;
+                max-width: 32px;
+                min-height: 32px;
+                max-height: 32px;
+            }
+            QPushButton:hover {
+                color: #FFFFFF;
+                background-color: #333333;
+            }
+            QPushButton:pressed {
+                background-color: #1A1A1A;
+            }
+        """)
+
+    def apply_green_button_style(self, button):
+        """Apply consistent green button style for active states"""
+        button.setStyleSheet("""
+            QPushButton {
+                border: none;
+                border-radius: 20px;
                 background-color: #1DB954;
-                color: white;
-                font-size: 20px;
+                color: #000000;
+                font-size: 16px;
+                min-width: 32px;
+                max-width: 32px;
+                min-height: 32px;
+                max-height: 32px;
             }
             QPushButton:hover {
                 background-color: #1ED760;
@@ -299,105 +398,41 @@ class LocalSpotifyQt(QMainWindow):
                 background-color: #169C46;
             }
         """)
-        
-        controls_layout.addWidget(self.shuffle_btn)
-        controls_layout.addWidget(self.previous_btn)
-        controls_layout.addWidget(self.play_pause_btn)
-        controls_layout.addWidget(self.next_btn)
-        controls_layout.addWidget(self.repeat_btn)
-        
-        center_layout.addLayout(controls_layout)
-        
-        # Progress bar
-        progress_layout = QHBoxLayout()
-        
-        self.time_label = QLabel("0:00")
-        self.time_label.setStyleSheet("color: #B3B3B3; font-size: 11px;")
-        self.time_label.setFixedWidth(35)
-        
-        self.progress_slider = QSlider(Qt.Horizontal)
-        self.progress_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: none;
-                height: 4px;
-                background: #404040;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #1DB954;
-                border: none;
-                width: 12px;
-                height: 12px;
-                margin: -4px 0;
-                border-radius: 6px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #1DB954;
-                border-radius: 2px;
-            }
-        """)
-        
-        self.duration_label = QLabel("0:00")
-        self.duration_label.setStyleSheet("color: #B3B3B3; font-size: 11px;")
-        self.duration_label.setFixedWidth(35)
-        
-        progress_layout.addWidget(self.time_label)
-        progress_layout.addWidget(self.progress_slider)
-        progress_layout.addWidget(self.duration_label)
-        
-        center_layout.addLayout(progress_layout)
-        player_layout.addLayout(center_layout)
-        
-        # Right: Volume controls
-        right_layout = QHBoxLayout()
-        right_layout.setAlignment(Qt.AlignRight | Qt.AlignCenter)
-        
-        self.mute_btn = QPushButton("🔊")
-        self.mute_btn.setFixedSize(30, 30)
-        self.mute_btn.setStyleSheet("""
-            QPushButton {
-                border: none;
-                background: transparent;
-                font-size: 16px;
-                color: #B3B3B3;
-            }
-            QPushButton:hover {
-                color: white;
-            }
-        """)
-        
-        self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(70)
-        self.volume_slider.setFixedWidth(100)
-        self.volume_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: none;
-                height: 4px;
-                background: #404040;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #1DB954;
-                border: none;
-                width: 12px;
-                height: 12px;
-                margin: -4px 0;
-                border-radius: 6px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #1DB954;
-                border-radius: 2px;
-            }
-        """)
-        
-        right_layout.addWidget(self.mute_btn)
-        right_layout.addWidget(self.volume_slider)
-        
-        player_layout.addLayout(right_layout)
-        
-        player_dock.setWidget(player_widget)
-        self.addDockWidget(Qt.BottomDockWidgetArea, player_dock)
+
+    def update_button_states(self, has_song=True):
+        """Update button states based on whether a song is loaded"""
+        if has_song:
+            # Enable previous/next buttons
+            self.apply_grey_button_style(self.previous_btn)
+            self.apply_grey_button_style(self.next_btn)
+            self.previous_btn.setEnabled(True)
+            self.next_btn.setEnabled(True)
+            
+            # Enable play button
+            self.play_pause_btn.setEnabled(True)
+            
+        else:
+            # Disable previous/next buttons
+            disabled_style = """
+                QPushButton {
+                    border: none;
+                    border-radius: 20px;
+                    background-color: transparent;
+                    color: #404040;
+                    font-size: 16px;
+                    min-width: 32px;
+                    max-width: 32px;
+                    min-height: 32px;
+                    max-height: 32px;
+                }
+            """
+            self.previous_btn.setStyleSheet(disabled_style)
+            self.next_btn.setStyleSheet(disabled_style)
+            self.previous_btn.setEnabled(False)
+            self.next_btn.setEnabled(False)
+            
+            # Disable play button
+            self.play_pause_btn.setEnabled(False)
 
     def create_menu_bar(self):
         """Create the menu bar"""
@@ -482,7 +517,7 @@ class LocalSpotifyQt(QMainWindow):
         self.music_table.customContextMenuRequested.connect(self.show_context_menu)
         self.music_table.itemChanged.connect(self.on_table_item_changed)
         
-        # Player connections
+        # Player control connections
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
         self.next_btn.clicked.connect(self.next_song)
         self.previous_btn.clicked.connect(self.previous_song)
@@ -491,19 +526,18 @@ class LocalSpotifyQt(QMainWindow):
         
         # Volume connections
         self.volume_slider.valueChanged.connect(self.on_volume_changed)
-        self.volume_slider.sliderPressed.connect(self.on_volume_slider_pressed)
-        self.volume_slider.sliderReleased.connect(self.on_volume_slider_released)
         self.mute_btn.clicked.connect(self.toggle_mute)
         
         # Progress connections
-        self.progress_slider.sliderMoved.connect(self.on_progress_slider_moved)
-        self.progress_slider.sliderPressed.connect(self.on_progress_slider_pressed)
-        self.progress_slider.sliderReleased.connect(self.on_progress_slider_released)
+        self.position_slider.sliderMoved.connect(self.on_position_slider_moved)
+        self.position_slider.sliderPressed.connect(self.on_position_slider_pressed)
+        self.position_slider.sliderReleased.connect(self.on_position_slider_released)
         
-        # Audio player connections
+        # Audio player connections (only connect once here)
         self.player.positionChanged.connect(self.update_position)
         self.player.durationChanged.connect(self.update_duration)
         self.player.stateChanged.connect(self.on_player_state_changed)
+        self.player.songEnded.connect(self.on_song_end)
     
     # Import and file management methods
     def add_folder(self):
@@ -739,10 +773,9 @@ class LocalSpotifyQt(QMainWindow):
             song_data = title_item.data(Qt.UserRole)
             if song_data:
                 self.play_song(song_data)
+
     def play_song(self, song_data):
         """Play a song"""
-        # song_data is a tuple: (id, title, artist, album, year, genre, duration, file_path, ...)
-        # Access file_path by index (index 7)
         file_path = song_data[7] if len(song_data) > 7 else None
         
         if not file_path or not os.path.exists(file_path):
@@ -751,26 +784,23 @@ class LocalSpotifyQt(QMainWindow):
         
         self.current_song_data = song_data
         
-        # Update UI - access tuple elements by index
+        # Update UI
         title = str(song_data[1]) if len(song_data) > 1 else "Unknown"
         artist = str(song_data[2]) if len(song_data) > 2 else "Unknown Artist"
         
-        self.current_title_label.setText(title)
+        self.current_song_label.setText(title)
         self.current_artist_label.setText(artist)
+        
+        # Enable buttons now that we have a song
+        self.update_button_states(has_song=True)
         
         # Load and play
         self.player.load_song(file_path)
         self.player.play()
         
-        # Update play button
+        # Update play button to show pause and make it green
         self.play_pause_btn.setText("⏸")
-        
-        # Update current playlist if not already set
-        if not self.current_playlist:
-            self.current_playlist = self.get_current_song_list()
-            self.current_index = self.find_current_song_index(self.current_playlist)
-            if self.shuffle_mode:
-                self.create_shuffled_playlist()
+        self.apply_green_button_style(self.play_pause_btn)
         
         self.statusBar().showMessage(f"Playing: {title} - {artist}")
     
@@ -905,6 +935,64 @@ class LocalSpotifyQt(QMainWindow):
                     item.setText(song_data[field] if song_data[field] else '')
             except:
                 item.setText('')
+
+    def update_song_info_display(self, song_data):
+        """Update the song info display with text wrapping"""
+        try:
+            if song_data and len(song_data) > 1:
+                title = song_data[1] if song_data[1] else "Unknown Title"
+                artist = song_data[2] if len(song_data) > 2 and song_data[2] else "Unknown Artist"
+                
+                # Update labels with truncation for very long texts
+                if len(title) > 60:  # Truncate very long titles
+                    title = title[:57] + "..."
+                
+                if len(artist) > 40:  # Truncate very long artist names
+                    artist = artist[:37] + "..."
+                
+                self.current_song_label.setText(title)
+                self.current_artist_label.setText(artist)
+            else:
+                self.current_song_label.setText("No song playing")
+                self.current_artist_label.setText("")
+                
+        except Exception as e:
+            print(f"❌ Error updating song info: {e}")
+            self.current_song_label.setText("No song playing")
+            self.current_artist_label.setText("")
+
+    def on_volume_changed(self, value):
+        """Handle volume slider changes"""
+        try:
+            self.player.set_volume(value)
+            self.volume_label.setText(f"{value}%")
+            
+            # Update mute button icon based on volume
+            if value == 0:
+                self.mute_btn.setText("🔇")
+            elif value < 30:
+                self.mute_btn.setText("🔈")
+            elif value < 70:
+                self.mute_btn.setText("🔉")
+            else:
+                self.mute_btn.setText("🔊")
+                
+        except Exception as e:
+            print(f"❌ Volume error: {e}")
+
+    def on_position_slider_moved(self, position):
+        """Handle position slider movement"""
+        if self.slider_pressed:
+            self.player.set_position(position)
+
+    def on_position_slider_pressed(self):
+        """Handle position slider press"""
+        self.slider_pressed = True
+
+    def on_position_slider_released(self):
+        """Handle position slider release"""
+        self.slider_pressed = False
+
     def on_playlist_select(self, item):
         """Handle playlist selection"""
         playlist_id = item.data(Qt.UserRole)
@@ -929,6 +1017,128 @@ class LocalSpotifyQt(QMainWindow):
                 self.music_table.setItem(row, 2, QTableWidgetItem(album))
                 self.music_table.setItem(row, 3, QTableWidgetItem(self.format_duration(duration)))
     
+    
+    def next_song(self):
+        """Play the next song in the current playlist or library"""
+        try:
+            total_rows = self.music_table.rowCount()
+            
+            if total_rows == 0:
+                return
+            
+            next_row = 0
+            
+            if self.shuffle_mode and hasattr(self, 'shuffled_playlist') and self.shuffled_playlist:
+                # Use shuffled playlist
+                self.shuffle_index += 1
+                
+                # If we've reached the end of shuffle list, reshuffle for repeat all
+                if self.shuffle_index >= len(self.shuffled_playlist):
+                    if self.repeat_mode == "all":
+                        # Reshuffle and continue
+                        import random
+                        random.shuffle(self.shuffled_playlist)
+                        self.shuffle_index = 0
+                        print("🔀 Reshuffling playlist for repeat all")
+                    else:
+                        # End of shuffle, stop
+                        print("🔀 End of shuffled playlist")
+                        return
+                
+                next_row = self.shuffled_playlist[self.shuffle_index]
+                print(f"🔀 Shuffle next: row {next_row}")
+                
+            else:
+                # Normal sequential mode
+                current_row = self.music_table.currentRow()
+                
+                # Calculate next row
+                if current_row < total_rows - 1:
+                    next_row = current_row + 1
+                else:
+                    # If at the end, loop back to the beginning for "repeat all"
+                    if self.repeat_mode == "all":
+                        next_row = 0
+                    else:
+                        print("📜 End of playlist")
+                        return
+            
+            # Select and play the next song
+            self.music_table.selectRow(next_row)
+            self.on_song_double_click(next_row, 0)
+            
+        except Exception as e:
+            print(f"❌ Error playing next song: {e}")
+    
+    def previous_song(self):
+        """Play the previous song in the current playlist or library"""
+        try:
+            total_rows = self.music_table.rowCount()
+            
+            if total_rows == 0:
+                return
+            
+            prev_row = 0
+            
+            if self.shuffle_mode and hasattr(self, 'shuffled_playlist') and self.shuffled_playlist:
+                # Use shuffled playlist
+                self.shuffle_index -= 1
+                
+                # If we've gone before the beginning, wrap to end
+                if self.shuffle_index < 0:
+                    self.shuffle_index = len(self.shuffled_playlist) - 1
+                
+                prev_row = self.shuffled_playlist[self.shuffle_index]
+                print(f"🔀 Shuffle previous: row {prev_row}")
+                
+            else:
+                # Normal sequential mode
+                current_row = self.music_table.currentRow()
+                
+                # Calculate previous row
+                if current_row > 0:
+                    prev_row = current_row - 1
+                else:
+                    # If at the beginning, wrap to end
+                    prev_row = total_rows - 1
+            
+            # Select and play the previous song
+            self.music_table.selectRow(prev_row)
+            self.on_song_double_click(prev_row, 0)
+            
+        except Exception as e:
+            print(f"❌ Error playing previous song: {e}")
+    
+    def toggle_shuffle(self):
+        """Toggle shuffle mode on/off"""
+        self.shuffle_mode = not self.shuffle_mode
+        
+        if self.shuffle_mode:
+            self.apply_green_button_style(self.shuffle_btn)
+            print("🔀 Shuffle: ON")
+        else:
+            self.apply_grey_button_style(self.shuffle_btn)
+            print("🔀 Shuffle: OFF")
+
+    def toggle_repeat(self):
+        """Toggle between repeat modes: off -> one -> all -> off"""
+        if self.repeat_mode == "off":
+            self.repeat_mode = "one"
+            self.repeat_btn.setText("🔂")
+            self.apply_green_button_style(self.repeat_btn)
+            print("🔂 Repeat: One")
+            
+        elif self.repeat_mode == "one":
+            self.repeat_mode = "all"
+            self.repeat_btn.setText("🔁")
+            self.apply_green_button_style(self.repeat_btn)
+            print("🔁 Repeat: All")
+            
+        else:  # "all" -> "off"
+            self.repeat_mode = "off"
+            self.repeat_btn.setText("↪️")
+            self.apply_grey_button_style(self.repeat_btn)
+            print("↪️ Repeat: Off")
     # Player control methods
     def toggle_play_pause(self):
         """Toggle play/pause"""
@@ -936,96 +1146,15 @@ class LocalSpotifyQt(QMainWindow):
             if self.player.is_playing():
                 self.player.pause()
                 self.play_pause_btn.setText("▶")
+                self.apply_grey_button_style(self.play_pause_btn)
             else:
                 self.player.play()
                 self.play_pause_btn.setText("⏸")
+                self.apply_green_button_style(self.play_pause_btn)
         else:
             # If no song is loaded, play first song in current view
             if self.music_table.rowCount() > 0:
                 self.on_song_double_click(0, 0)
-    
-    def next_song(self):
-        """Play next song"""
-        if not self.current_playlist:
-            return
-        
-        if self.shuffle_mode and self.shuffled_playlist_order:
-            current_shuffled_index = self.shuffled_playlist_order.index(self.current_index)
-            if current_shuffled_index < len(self.shuffled_playlist_order) - 1:
-                self.current_index = self.shuffled_playlist_order[current_shuffled_index + 1]
-            elif self.repeat_mode == "all":
-                self.current_index = self.shuffled_playlist_order[0]
-            else:
-                return
-        else:
-            if self.current_index < len(self.current_playlist) - 1:
-                self.current_index += 1
-            elif self.repeat_mode == "all":
-                self.current_index = 0
-            else:
-                return
-        
-        song_data = self.current_playlist[self.current_index]
-        self.play_song(song_data)
-        self.update_table_selection(self.current_index)
-    
-    def previous_song(self):
-        """Play previous song"""
-        if not self.current_playlist:
-            return
-        
-        if self.shuffle_mode and self.shuffled_playlist_order:
-            current_shuffled_index = self.shuffled_playlist_order.index(self.current_index)
-            if current_shuffled_index > 0:
-                self.current_index = self.shuffled_playlist_order[current_shuffled_index - 1]
-            elif self.repeat_mode == "all":
-                self.current_index = self.shuffled_playlist_order[-1]
-            else:
-                return
-        else:
-            if self.current_index > 0:
-                self.current_index -= 1
-            elif self.repeat_mode == "all":
-                self.current_index = len(self.current_playlist) - 1
-            else:
-                return
-        
-        song_data = self.current_playlist[self.current_index]
-        self.play_song(song_data)
-        self.update_table_selection(self.current_index)
-    
-    def toggle_shuffle(self):
-        """Toggle shuffle mode"""
-        self.shuffle_mode = not self.shuffle_mode
-        
-        if self.shuffle_mode:
-            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet() + "color: #1DB954;")
-            if self.current_playlist:
-                self.create_shuffled_playlist()
-        else:
-            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("color: #1DB954;", ""))
-            self.shuffled_playlist_order = []
-        
-        self.statusBar().showMessage(f"Shuffle {'ON' if self.shuffle_mode else 'OFF'}", 2000)
-    
-    def toggle_repeat(self):
-        """Toggle repeat mode (off -> one -> all -> off)"""
-        if self.repeat_mode == "off":
-            self.repeat_mode = "one"
-            self.repeat_btn.setText("🔂")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet() + "color: #1DB954;")
-            status = "Repeat ONE"
-        elif self.repeat_mode == "one":
-            self.repeat_mode = "all"
-            self.repeat_btn.setText("🔁")
-            status = "Repeat ALL"
-        else:
-            self.repeat_mode = "off"
-            self.repeat_btn.setText("🔁")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("color: #1DB954;", ""))
-            status = "Repeat OFF"
-        
-        self.statusBar().showMessage(status, 2000)
     
     # Helper methods
     def get_current_song_list(self):
@@ -1072,11 +1201,35 @@ class LocalSpotifyQt(QMainWindow):
     
     def on_song_end(self):
         """Handle when song ends"""
-        if self.repeat_mode == "one":
-            self.player.set_position(0)
-            self.player.play()
-        else:
-            self.next_song()
+        try:
+            if self.repeat_mode == "one":
+                # For repeat one, we need to reload the current song
+                print("🔁 Repeating current song")
+                if self.current_song_data:
+                    # Get the file path from current song data
+                    file_path = self.current_song_data[7] if len(self.current_song_data) > 7 else None
+                    if file_path and os.path.exists(file_path):
+                        # Reload and play the same song
+                        self.player.load_song(file_path)
+                        self.player.play()
+                        print(f"🔄 Reloaded and playing: {os.path.basename(file_path)}")
+                    else:
+                        print("❌ Current song file not found for repeat")
+                else:
+                    print("❌ No current song data for repeat")
+                    
+            elif self.repeat_mode == "all":
+                # Play next song in playlist/library
+                print("🔁 Repeat all - playing next song")
+                self.next_song()
+                
+            else:  # repeat_mode == "off"
+                # Stop playback and reset UI
+                print("⏹️ Song ended - stopping")
+                self.play_pause_btn.setText("▶")
+                
+        except Exception as e:
+            print(f"❌ Error handling song end: {e}")
     
     # Keyboard shortcuts
     def setup_keyboard_shortcuts(self):
@@ -1144,13 +1297,13 @@ class LocalSpotifyQt(QMainWindow):
     def update_position(self, position):
         """Update playback position"""
         if not self.slider_pressed:
-            self.progress_slider.setValue(position)
-            self.time_label.setText(self.player.format_duration(position // 1000))
-    
+            self.position_slider.setValue(position)  # Changed from progress_slider
+            self.current_time_label.setText(self.format_duration(position // 1000))
+
     def update_duration(self, duration):
         """Update track duration"""
-        self.progress_slider.setRange(0, duration)
-        self.duration_label.setText(self.player.format_duration(duration // 1000))
+        self.position_slider.setRange(0, duration)  # Changed from progress_slider
+        self.total_time_label.setText(self.format_duration(duration // 1000))
     
     def on_player_state_changed(self, state):
         """Handle player state changes"""
@@ -1224,3 +1377,54 @@ class LocalSpotifyQt(QMainWindow):
                 
         except Exception as e:
             print(f"❌ Error during double extension fix: {e}")
+    
+    def handle_song_ended(self):
+        """Handle when a song ends - implement repeat logic"""
+        try:
+            if self.repeat_mode == "one":
+                # Repeat current song
+                print("🔁 Repeating current song")
+                self.audio_player.set_position(0)  # Go back to start
+                self.audio_player.play()
+                
+            elif self.repeat_mode == "all":
+                # Play next song in playlist/library
+                print("🔁 Repeat all - playing next song")
+                self.next_song()
+                
+            else:  # repeat_mode == "off"
+                # Stop playback
+                print("⏹️ Song ended - stopping")
+                # Don't do anything, let it stay stopped
+                
+        except Exception as e:
+            print(f"❌ Error handling song end: {e}")
+
+
+    def toggle_repeat_mode(self):
+        """Toggle between repeat modes: off -> one -> all -> off"""
+        try:
+            if self.repeat_mode == "off":
+                self.repeat_mode = "one"
+                # Update repeat button appearance
+                if hasattr(self, 'repeat_button'):
+                    self.repeat_button.setText("🔂")  # Repeat one icon
+                    self.repeat_button.setToolTip("Repeat: One")
+                print("🔂 Repeat mode: One")
+                
+            elif self.repeat_mode == "one":
+                self.repeat_mode = "all"
+                if hasattr(self, 'repeat_button'):
+                    self.repeat_button.setText("🔁")  # Repeat all icon
+                    self.repeat_button.setToolTip("Repeat: All")
+                print("🔁 Repeat mode: All")
+                
+            else:  # self.repeat_mode == "all"
+                self.repeat_mode = "off"
+                if hasattr(self, 'repeat_button'):
+                    self.repeat_button.setText("↪️")  # No repeat icon
+                    self.repeat_button.setToolTip("Repeat: Off")
+                print("↪️ Repeat mode: Off")
+                
+        except Exception as e:
+            print(f"❌ Error toggling repeat mode: {e}")
