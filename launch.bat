@@ -17,7 +17,7 @@ echo.
 
 echo Installing dependencies...
 echo Installing pygame, mutagen, pillow...
-pip install pygame mutagen pillow
+pip install pygame mutagen pillow PyQt5 pydub yt-dlp requests python-vlc
 if errorlevel 1 (
     echo ❌ Failed to install dependencies
     pause

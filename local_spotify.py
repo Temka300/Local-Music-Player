@@ -25,6 +25,20 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 
+# Import YouTube downloader
+try:
+    from youtube_downloader import YouTubeDownloader, YouTubeDownloadThread
+    YOUTUBE_AVAILABLE = True
+    print("✅ YouTube downloader available")
+except ImportError:
+    YOUTUBE_AVAILABLE = False
+    print("⚠️ YouTube downloader not available")
+    # Create dummy classes to avoid errors
+    class YouTubeDownloader:
+        pass
+    class YouTubeDownloadThread:
+        pass
+
 # Import pydub for M4A conversion (optional dependency)
 try:
     from pydub import AudioSegment
@@ -34,6 +48,16 @@ except ImportError:
     PYDUB_AVAILABLE = False
     print("⚠️ pydub not available - M4A files may have playback issues")
     print("💡 Install with: pip install pydub")
+
+# Import VLC for better audio playback
+try:
+    import vlc
+    VLC_AVAILABLE = True
+    print("✅ python-vlc available - Enhanced audio playback")
+except ImportError:
+    VLC_AVAILABLE = False
+    print("⚠️ python-vlc not available - Install with: pip install python-vlc")
+    print("💡 Falling back to Qt multimedia (may have codec issues)")
 
 
 # Custom delegate to control which columns are editable
@@ -89,7 +113,7 @@ class MusicDatabase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Songs table
+        # Songs table with all required columns
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS songs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,9 +125,29 @@ class MusicDatabase:
                 duration REAL,
                 file_path TEXT UNIQUE,
                 album_art BLOB,
-                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                source TEXT DEFAULT 'local',
+                youtube_url TEXT,
+                youtube_id TEXT
             )
         ''')
+        
+        # Check if the new columns exist and add them if they don't
+        cursor.execute("PRAGMA table_info(songs)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        # Add missing columns
+        if 'source' not in columns:
+            cursor.execute('ALTER TABLE songs ADD COLUMN source TEXT DEFAULT "local"')
+            print("✅ Added 'source' column to songs table")
+        
+        if 'youtube_url' not in columns:
+            cursor.execute('ALTER TABLE songs ADD COLUMN youtube_url TEXT')
+            print("✅ Added 'youtube_url' column to songs table")
+        
+        if 'youtube_id' not in columns:
+            cursor.execute('ALTER TABLE songs ADD COLUMN youtube_id TEXT')
+            print("✅ Added 'youtube_id' column to songs table")
         
         # Playlists table
         cursor.execute('''
@@ -135,15 +179,35 @@ class MusicDatabase:
         cursor = conn.cursor()
         
         try:
-            cursor.execute('''
-                INSERT OR REPLACE INTO songs 
-                (title, artist, album, year, genre, duration, file_path, album_art)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', song_data)
+            # Handle both old format (8 fields) and new format (11 fields)
+            if len(song_data) == 8:
+                # Old format: title, artist, album, year, genre, duration, file_path, album_art
+                cursor.execute('''
+                    INSERT OR REPLACE INTO songs 
+                    (title, artist, album, year, genre, duration, file_path, album_art, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'local')
+                ''', song_data)
+                print(f"✅ Added local song: {song_data[0]} by {song_data[1]}")
+            elif len(song_data) == 11:
+                # New format: title, artist, album, year, genre, duration, file_path, album_art, source, youtube_url, youtube_id
+                cursor.execute('''
+                    INSERT OR REPLACE INTO songs 
+                    (title, artist, album, year, genre, duration, file_path, album_art, source, youtube_url, youtube_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', song_data)
+                print(f"✅ Added YouTube song: {song_data[0]} by {song_data[1]}")
+            else:
+                print(f"❌ Invalid song_data length: {len(song_data)}")
+                print(f"❌ Song data: {song_data}")
+                return None
+            
             conn.commit()
             return cursor.lastrowid
+        
         except Exception as e:
-            print(f"Error adding song: {e}")
+            print(f"❌ Error adding song to database: {e}")
+            print(f"❌ Song data: {song_data}")
+            print(f"❌ Song data length: {len(song_data)}")
             return None
         finally:
             conn.close()
@@ -419,92 +483,155 @@ class MusicLibraryOrganizer:
 
 
 class AudioPlayer(QObject):
-    """Enhanced audio playback manager using Qt"""
+    """Enhanced audio playback manager using VLC"""
     
     positionChanged = pyqtSignal(int)
     durationChanged = pyqtSignal(int)
-    stateChanged = pyqtSignal(QMediaPlayer.State)
+    stateChanged = pyqtSignal(int)  # VLC uses different state values
     
     def __init__(self):
         super().__init__()
-        self.player = QMediaPlayer()
+        
+        try:
+            if VLC_AVAILABLE:
+                # Create VLC instance and player
+                self.vlc_instance = vlc.Instance('--no-xlib')  # Disable X11 for better compatibility
+                self.player = self.vlc_instance.media_player_new()
+                self.using_vlc = True
+                print("✅ VLC audio player initialized")
+            else:
+                # Fallback to Qt MediaPlayer
+                self.player = QMediaPlayer()
+                self.using_vlc = False
+                print("✅ Qt MediaPlayer initialized (fallback)")
+                
+        except Exception as e:
+            print(f"❌ Error initializing VLC, falling back to Qt MediaPlayer: {e}")
+            self.player = QMediaPlayer()
+            self.using_vlc = False
+        
         self.current_song = None
         self.volume = 70
         self._temp_audio_file = None
+        self.duration = 0
         
-        # Connect signals
-        self.player.positionChanged.connect(self.positionChanged.emit)
-        self.player.durationChanged.connect(self.durationChanged.emit)
-        self.player.stateChanged.connect(self.stateChanged.emit)
+        # Set up position tracking timer
+        self.position_timer = QTimer()
+        self.position_timer.timeout.connect(self._update_position)
+        self.position_timer.start(100)  # Update every 100ms
         
         # Set initial volume
-        self.player.setVolume(self.volume)
+        self.player.audio_set_volume(self.volume)
     
     def load_song(self, file_path):
-        """Load a song file with enhanced error handling and M4A conversion"""
+        """Load a song file with VLC"""
         try:
             # Clean up previous temp file
             self._cleanup_temp_files()
             
-            # Check if file is M4A and needs conversion
-            if file_path.lower().endswith('.m4a') and PYDUB_AVAILABLE:
-                converted_path = self._convert_and_load_m4a(file_path)
+            # Store original file path
+            self.current_song = file_path
+            
+            # Check if file needs conversion for better compatibility
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            # Convert problematic formats if pydub is available
+            if file_ext in ['.m4a', '.ogg', '.flac'] and PYDUB_AVAILABLE:
+                print(f"🔄 Converting {file_ext} file for better compatibility...")
+                converted_path = self._convert_audio_file(file_path)
                 if converted_path:
                     file_path = converted_path
             
-            # Load the file
-            url = QUrl.fromLocalFile(file_path)
-            content = QMediaContent(url)
-            self.player.setMedia(content)
-            self.current_song = file_path
+            # Create VLC media object
+            media = self.vlc_instance.media_new(file_path)
+            if media is None:
+                raise Exception("Failed to create VLC media object")
             
+            # Set media to player
+            self.player.set_media(media)
+            
+            # Get duration (may take a moment to be available)
+            QTimer.singleShot(500, self._get_duration)
+            
+            print(f"✅ Loaded song with VLC: {os.path.basename(file_path)}")
             return True
             
         except Exception as e:
-            print(f"Error loading song {file_path}: {e}")
+            print(f"❌ Error loading song {file_path}: {e}")
             return False
     
-    def _convert_and_load_m4a(self, file_path):
-        """Convert M4A to WAV for better compatibility"""
+    def _convert_audio_file(self, file_path):
+        """Convert audio file to WAV for better compatibility"""
+        if not PYDUB_AVAILABLE:
+            return None
+            
         try:
             # Create temporary WAV file
             temp_dir = tempfile.gettempdir()
             temp_filename = f"temp_audio_{int(time.time())}.wav"
             temp_path = os.path.join(temp_dir, temp_filename)
             
-            # Convert M4A to WAV
-            audio = AudioSegment.from_file(file_path, format="m4a")
+            # Determine input format
+            file_ext = os.path.splitext(file_path)[1].lower()
+            format_map = {
+                '.mp3': 'mp3',
+                '.m4a': 'mp4',
+                '.ogg': 'ogg',
+                '.flac': 'flac',
+                '.wav': 'wav'
+            }
+            
+            input_format = format_map.get(file_ext, 'mp3')
+            
+            # Convert to WAV with VLC-compatible settings
+            audio = AudioSegment.from_file(file_path, format=input_format)
+            
+            # Ensure compatible audio format
+            audio = audio.set_frame_rate(44100)  # Standard sample rate
+            audio = audio.set_channels(2)        # Stereo
+            audio = audio.set_sample_width(2)    # 16-bit
+            
             audio.export(temp_path, format="wav")
             
             # Store temp file path for cleanup
             self._temp_audio_file = temp_path
             
-            print(f"🔄 Converted M4A to WAV: {os.path.basename(file_path)}")
+            print(f"✅ Converted {file_ext} to WAV: {os.path.basename(file_path)}")
             return temp_path
             
         except Exception as e:
-            print(f"❌ Failed to convert M4A file {file_path}: {e}")
+            print(f"❌ Failed to convert audio file {file_path}: {e}")
             return None
     
     def play(self):
         """Play the current song"""
-        self.player.play()
+        if self.player.get_media() is not None:
+            result = self.player.play()
+            if result == 0:  # VLC returns 0 on success
+                self.stateChanged.emit(1)  # Playing state
+                print("▶️ Playing")
+            else:
+                print("❌ Failed to start playback")
     
     def pause(self):
         """Pause playback"""
         self.player.pause()
+        self.stateChanged.emit(2)  # Paused state
+        print("⏸️ Paused")
     
     def stop(self):
         """Stop playback and cleanup temporary files"""
         self.player.stop()
+        self.stateChanged.emit(0)  # Stopped state
         self._cleanup_temp_files()
+        print("⏹️ Stopped")
     
     def _cleanup_temp_files(self):
         """Clean up temporary audio files"""
         if self._temp_audio_file and os.path.exists(self._temp_audio_file):
             try:
                 os.remove(self._temp_audio_file)
-                print(f"🧹 Cleaned up temp file: {self._temp_audio_file}")
+                print(f"🧹 Cleaned up temp file: {os.path.basename(self._temp_audio_file)}")
             except Exception as e:
                 print(f"Error cleaning temp file: {e}")
             finally:
@@ -513,20 +640,93 @@ class AudioPlayer(QObject):
     def set_volume(self, volume):
         """Set playback volume (0-100)"""
         self.volume = volume
-        self.player.setVolume(volume)
+        self.player.audio_set_volume(volume)
     
     def set_position(self, position):
-        """Set playback position"""
-        self.player.setPosition(position)
+        """Set playback position (in milliseconds)"""
+        if self.duration > 0:
+            # Convert position to percentage (0.0 - 1.0)
+            pos_percent = position / self.duration
+            self.player.set_position(pos_percent)
+    
+    def _update_position(self):
+        """Update position and emit signals"""
+        try:
+            if self.player.get_media() is not None:
+                # Get current position as percentage (0.0 - 1.0)
+                pos_percent = self.player.get_position()
+                
+                if self.duration > 0 and pos_percent >= 0:
+                    current_pos = int(pos_percent * self.duration)
+                    self.positionChanged.emit(current_pos)
+                
+                # Check if song has ended
+                state = self.player.get_state()
+                if state == vlc.State.Ended:
+                    self.stateChanged.emit(0)  # Stopped state
+                    print("🏁 Song ended")
+                    
+        except Exception as e:
+            # Silently handle VLC state query errors
+            pass
+    
+    def _get_duration(self):
+        """Get and emit duration"""
+        try:
+            duration_ms = self.player.get_length()
+            if duration_ms > 0:
+                self.duration = duration_ms
+                self.durationChanged.emit(duration_ms)
+                print(f"⏱️ Duration: {self.format_duration(duration_ms / 1000)}")
+            else:
+                # Try again in a moment if duration not available yet
+                QTimer.singleShot(500, self._get_duration)
+        except Exception as e:
+            print(f"Error getting duration: {e}")
+    
+    def format_duration(self, duration_seconds):
+        """Format duration in seconds to MM:SS format"""
+        if duration_seconds is None or duration_seconds <= 0:
+            return "0:00"
+        
+        minutes = int(duration_seconds // 60)
+        seconds = int(duration_seconds % 60)
+        return f"{minutes}:{seconds:02d}"
     
     def is_playing(self):
         """Check if music is currently playing"""
-        return self.player.state() == QMediaPlayer.PlayingState
+        try:
+            state = self.player.get_state()
+            return state == vlc.State.Playing
+        except:
+            return False
 
     def is_paused(self):
         """Check if music is paused"""
-        return self.player.state() == QMediaPlayer.PausedState
-
+        try:
+            state = self.player.get_state()
+            return state == vlc.State.Paused
+        except:
+            return False
+    
+    def get_state_string(self):
+        """Get current state as string for debugging"""
+        try:
+            state = self.player.get_state()
+            state_map = {
+                vlc.State.NothingSpecial: "Nothing Special",
+                vlc.State.Opening: "Opening",
+                vlc.State.Buffering: "Buffering", 
+                vlc.State.Playing: "Playing",
+                vlc.State.Paused: "Paused",
+                vlc.State.Stopped: "Stopped",
+                vlc.State.Ended: "Ended",
+                vlc.State.Error: "Error"
+            }
+            return state_map.get(state, f"Unknown({state})")
+        except:
+            return "Unknown"
+    
 
 class FileImportThread(QThread):
     """Thread for importing files without blocking the UI"""
@@ -629,10 +829,14 @@ class LocalSpotifyQt(QMainWindow):
         self.setWindowTitle("🎵 Local Spotify Qt - Music Player")
         self.setGeometry(100, 100, 1200, 800)
         
+        # Check VLC availability
+        if not VLC_AVAILABLE:
+            print("⚠️ VLC not available - some audio formats may not play correctly")
+    
         # Initialize components
         self.db = MusicDatabase()
         self.player = AudioPlayer()
-        
+
         # Initialize file organizer
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.organizer = MusicLibraryOrganizer(script_dir)
@@ -693,16 +897,17 @@ class LocalSpotifyQt(QMainWindow):
         title_label = QLabel("🎵 Local Spotify Qt")
         title_label.setObjectName("title")
         sidebar_layout.addWidget(title_label)
-        
-        # Import section
+          # Import section
         import_group = QGroupBox("📁 Import Music")
         import_layout = QVBoxLayout(import_group)
         
         self.add_folder_btn = QPushButton("📂 Add Folder")
         self.add_files_btn = QPushButton("📄 Add Files")
+        self.youtube_btn = QPushButton("🎵 Download from YouTube")
         
         import_layout.addWidget(self.add_folder_btn)
         import_layout.addWidget(self.add_files_btn)
+        import_layout.addWidget(self.youtube_btn)
         sidebar_layout.addWidget(import_group)
         
         # Search
@@ -1095,10 +1300,14 @@ class LocalSpotifyQt(QMainWindow):
         self.add_folder_btn.clicked.connect(self.add_folder)
         self.add_files_btn.clicked.connect(self.add_files)
         
+        # Always connect YouTube button - let the dialog handle availability check
+        self.youtube_btn.clicked.connect(self.youtube_download_dialog)
+        
         # Navigation
         self.library_btn.clicked.connect(self.show_library)
         self.create_playlist_btn.clicked.connect(self.create_playlist_dialog)
-          # Search
+        
+        # Search
         self.search_edit.textChanged.connect(self.on_search)
         
         # Music table
@@ -1410,269 +1619,17 @@ class LocalSpotifyQt(QMainWindow):
         self.refresh_library()
         QMessageBox.information(self, "Import Complete", f"Successfully imported {count} songs!")
     
-    def refresh_library(self):
-        """Refresh the music library display"""
-        # Clean up missing files first
-        self.cleanup_missing_files()
-        
-        # Clear and reload table
-        songs = self.db.get_all_songs()
-        self.music_table.setRowCount(len(songs))
-        
-        for row, song in enumerate(songs):
-            song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song
-            
-            # Create table items
-            title_item = QTableWidgetItem(title)
-            artist_item = QTableWidgetItem(artist)
-            album_item = QTableWidgetItem(album)
-            duration_item = QTableWidgetItem(self.format_duration(duration))
-            
-            # Set item flags - only Artist and Album are editable
-            title_item.setFlags(title_item.flags() & ~Qt.ItemIsEditable)
-            artist_item.setFlags(artist_item.flags() | Qt.ItemIsEditable)
-            album_item.setFlags(album_item.flags() | Qt.ItemIsEditable)
-            duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable)
-            
-            self.music_table.setItem(row, 0, title_item)
-            self.music_table.setItem(row, 1, artist_item)
-            self.music_table.setItem(row, 2, album_item)
-            self.music_table.setItem(row, 3, duration_item)
-            
-            # Store song ID for later use
-            self.music_table.item(row, 0).setData(Qt.UserRole, song_id)
-        
-        self.view_title.setText(f"Music Library ({len(songs)} songs)")
-
-    def refresh_playlists(self):
-        """Refresh the playlists display"""
-        self.playlist_list.clear()
-        playlists = self.db.get_playlists()
-        
-        for playlist in playlists:
-            playlist_id, name, description, created_date = playlist
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, playlist_id)
-            self.playlist_list.addItem(item)
-    
-    def cleanup_missing_files(self):
-        """Check for and remove missing files from the database"""
-        try:
-            removed_count = self.db.cleanup_missing_files(self.organizer.musics_folder)
-            if removed_count > 0:
-                print(f"🧹 Database cleanup: Removed {removed_count} missing files")
-        except Exception as e:
-            print(f"Error during database cleanup: {e}")
-    
-    def manual_cleanup(self):
-        """Manually trigger cleanup of missing files with user feedback"""
-        try:
-            removed_count = self.db.cleanup_missing_files(self.organizer.musics_folder)
-            if removed_count > 0:
-                QMessageBox.information(
-                    self, "Cleanup Complete",
-                    f"Removed {removed_count} missing files from database.\n"
-                    "The library has been updated."
-                )
-                self.refresh_library()
-            else:
-                QMessageBox.information(
-                    self, "Cleanup Complete",
-                    "No missing files found. Your library is up to date!"
-                )
-        except Exception as e:
-            QMessageBox.critical(self, "Cleanup Error", f"Error during cleanup: {e}")
-    
-    def on_search(self, query):
-        """Handle search input"""
-        if len(query) >= 2:
-            self.search_music(query)
-        elif len(query) == 0:
-            self.refresh_library()
-    
-    def search_music(self, query):
-        """Search for music in the library"""
-        songs = self.db.search_songs(query)
-        self.music_table.setRowCount(len(songs))
-        
-        for row, song in enumerate(songs):
-            song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song
-            
-            # Create table items
-            title_item = QTableWidgetItem(title)
-            artist_item = QTableWidgetItem(artist)
-            album_item = QTableWidgetItem(album)
-            duration_item = QTableWidgetItem(self.format_duration(duration))
-            
-            # Set item flags - only Artist and Album are editable
-            title_item.setFlags(title_item.flags() & ~Qt.ItemIsEditable)
-            artist_item.setFlags(artist_item.flags() | Qt.ItemIsEditable)
-            album_item.setFlags(album_item.flags() | Qt.ItemIsEditable)
-            duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable)
-            
-            self.music_table.setItem(row, 0, title_item)
-            self.music_table.setItem(row, 1, artist_item)
-            self.music_table.setItem(row, 2, album_item)
-            self.music_table.setItem(row, 3, duration_item)
-            
-            # Store song ID for later use
-            self.music_table.item(row, 0).setData(Qt.UserRole, song_id)
-        
-        self.view_title.setText(f"Search Results ({len(songs)} songs)")
-    
-    def show_library(self):
-        """Show the full music library"""
-        self.search_edit.clear()
-        self.refresh_library()
-    
-    def on_song_double_click(self, row, column):
-        """Handle double-click on a song"""
-        # Only play song if not clicking on editable columns (Artist/Album)
-        if column not in [1, 2]:  # Columns 1 and 2 are Artist and Album
-            self.play_selected_song(row)
-
-    def on_table_item_changed(self, item):
-        """Handle changes to table items (for editing artist/album)"""
-        if item is None:
+    def youtube_download_dialog(self):
+        """Show dialog to download from YouTube"""
+        if not YOUTUBE_AVAILABLE:
+            QMessageBox.warning(self, "YouTube Download", 
+                              "YouTube downloader is not available. Please install yt-dlp:\n\n"
+                              "pip install yt-dlp requests")
             return
-        
-        row = item.row()
-        column = item.column()
-        new_value = item.text().strip()
-        
-        # Only allow editing of Artist (column 1) and Album (column 2)
-        if column not in [1, 2]:
-            return
-        
-        # Get the song ID
-        song_id_item = self.music_table.item(row, 0)
-        if song_id_item is None:
-            return
-        
-        song_id = song_id_item.data(Qt.UserRole)
-        if song_id is None:
-            return
-        
-        # Map column to database field
-        field_map = {1: 'artist', 2: 'album'}
-        field = field_map[column]
-        
-        # Update database
-        if self.db.update_song_metadata(song_id, field, new_value):
-            print(f"✅ Updated {field} to '{new_value}' for song ID {song_id}")
-            # Update the current song data if it's the currently playing song
-            if hasattr(self, 'current_song_data') and self.current_song_data and self.current_song_data[0] == song_id:
-                # Update the current song data tuple
-                song_list = list(self.current_song_data)
-                if field == 'artist':
-                    song_list[2] = new_value  # Artist is at index 2
-                elif field == 'album':
-                    song_list[3] = new_value  # Album is at index 3
-                self.current_song_data = tuple(song_list)
-                self.update_current_song_display()
-        else:
-            print(f"❌ Failed to update {field} for song ID {song_id}")
-            # Revert the change in the UI
-            songs = self.db.get_all_songs()
-            for song in songs:
-                if song[0] == song_id:
-                    if field == 'artist':
-                        item.setText(song[2])  # Artist is at index 2
-                    elif field == 'album':
-                        item.setText(song[3])  # Album is at index 3
-                    break
-
-    def show_context_menu(self, position):
-        """Show context menu for the music table"""
-        item = self.music_table.itemAt(position)
-        if item is None:
-            return
-        
-        row = item.row()
-        self.music_table.selectRow(row)
-        
-        # Create context menu
-        context_menu = QMenu(self)
-        context_menu.setStyleSheet("""
-            QMenu {
-                background-color: #282828;
-                color: #FFFFFF;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 2px;
-            }
-            QMenu::item {
-                padding: 8px 20px;
-                border-radius: 2px;
-            }
-            QMenu::item:selected {
-                background-color: #1DB954;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #404040;
-                margin: 2px 0px;
-            }
-        """)
-        
-        # Add menu actions
-        play_action = context_menu.addAction("▶ Play")
-        context_menu.addSeparator()
-        
-        add_to_playlist_action = context_menu.addAction("📝 Add to Playlist...")
-        context_menu.addSeparator()
-        
-        show_location_action = context_menu.addAction("📂 Show File Location")
-        edit_metadata_action = context_menu.addAction("✏️ Edit Metadata")
-        
-        # Connect actions
-        play_action.triggered.connect(lambda: self.play_selected_song(row))
-        add_to_playlist_action.triggered.connect(self.add_to_playlist_dialog)
-        show_location_action.triggered.connect(lambda: self.show_file_location(row))
-        edit_metadata_action.triggered.connect(lambda: self.edit_metadata_dialog(row))
-        
-        # Show menu
-        context_menu.exec_(self.music_table.mapToGlobal(position))
-
-    def show_file_location(self, row):
-        """Show the file location of the selected song"""
-        song_id = self.music_table.item(row, 0).data(Qt.UserRole)
-        songs = self.db.get_all_songs()
-        
-        for song in songs:
-            if song[0] == song_id:
-                file_path = song[7]  # file_path is at index 7
-                if os.path.exists(file_path):
-                    # Open file explorer and select the file
-                    if sys.platform == "win32":
-                        os.system(f'explorer /select,"{file_path}"')
-                    elif sys.platform == "darwin":  # macOS
-                        os.system(f'open -R "{file_path}"')
-                    else:  # Linux
-                        folder_path = os.path.dirname(file_path)
-                        os.system(f'xdg-open "{folder_path}"')
-                else:
-                    QMessageBox.warning(self, "File Not Found", f"The file no longer exists:\n{file_path}")
-                break
-
-    def edit_metadata_dialog(self, row):
-        """Show dialog to edit song metadata"""
-        song_id = self.music_table.item(row, 0).data(Qt.UserRole)
-        songs = self.db.get_all_songs()
-        
-        current_song = None
-        for song in songs:
-            if song[0] == song_id:
-                current_song = song
-                break
-        
-        if not current_song:
-            return
-        
-        # Create dialog
+            
         dialog = QDialog(self)
-        dialog.setWindowTitle("Edit Metadata")
-        dialog.setFixedSize(400, 300)
+        dialog.setWindowTitle("Download from YouTube")
+        dialog.setFixedSize(500, 250)
         dialog.setStyleSheet("""
             QDialog {
                 background-color: #191414;
@@ -1681,6 +1638,7 @@ class LocalSpotifyQt(QMainWindow):
             QLabel {
                 color: #FFFFFF;
                 font-size: 12px;
+                font-weight: bold;
             }
             QLineEdit {
                 background-color: #282828;
@@ -1689,6 +1647,9 @@ class LocalSpotifyQt(QMainWindow):
                 border-radius: 4px;
                 padding: 8px;
                 font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #1DB954;
             }
             QPushButton {
                 background-color: #1DB954;
@@ -1702,81 +1663,207 @@ class LocalSpotifyQt(QMainWindow):
             QPushButton:hover {
                 background-color: #1ed760;
             }
-            QPushButton:pressed {
-                background-color: #1aa34a;
+            QPushButton#cancelButton {
+                background-color: #404040;
+            }
+            QPushButton#cancelButton:hover {
+                background-color: #606060;
             }
         """)
         
         layout = QVBoxLayout(dialog)
-        layout.setSpacing(10)
         
-        # Title field
-        layout.addWidget(QLabel("Title:"))
-        title_edit = QLineEdit(current_song[1])
-        layout.addWidget(title_edit)
+        # Title
+        title_label = QLabel("🎵 Download Audio from YouTube")
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
         
-        # Artist field
-        layout.addWidget(QLabel("Artist:"))
-        artist_edit = QLineEdit(current_song[2])
-        layout.addWidget(artist_edit)
+        # URL input
+        layout.addWidget(QLabel("YouTube URL:"))
+        url_edit = QLineEdit()
+        url_edit.setPlaceholderText("Paste YouTube video or playlist URL here...")
+        layout.addWidget(url_edit)
         
-        # Album field
-        layout.addWidget(QLabel("Album:"))
-        album_edit = QLineEdit(current_song[3])
-        layout.addWidget(album_edit)
+        # Info label
+        info_label = QLabel("• Supports individual videos and playlists\n"
+                           "• Audio will be downloaded as MP3 (192kbps)\n"
+                           "• Channel name will be used as artist")
+        info_label.setStyleSheet("color: #B3B3B3; font-size: 10px; font-weight: normal; margin-top: 10px;")
+        layout.addWidget(info_label)
         
-        # Year field
-        layout.addWidget(QLabel("Year:"))
-        year_edit = QLineEdit(current_song[4])
-        layout.addWidget(year_edit)
-        
-        # Genre field
-        layout.addWidget(QLabel("Genre:"))
-        genre_edit = QLineEdit(current_song[5])
-        layout.addWidget(genre_edit)
+        # Warning label
+        warning_label = QLabel("⚠️ Please respect copyright and only download content you have permission to use.")
+        warning_label.setStyleSheet("color: #FF6B6B; font-size: 9px; font-weight: normal;")
+        layout.addWidget(warning_label)
         
         # Buttons
         button_layout = QHBoxLayout()
-        save_btn = QPushButton("Save")
+        download_btn = QPushButton("🎵 Download")
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelButton")
         
-        button_layout.addWidget(save_btn)
+        button_layout.addWidget(download_btn)
         button_layout.addWidget(cancel_btn)
         layout.addLayout(button_layout)
         
-        # Connect buttons
-        def save_changes():
-            # Update all fields
-            updates = [
-                ('title', title_edit.text().strip()),
-                ('artist', artist_edit.text().strip()),
-                ('album', album_edit.text().strip()),
-                ('year', year_edit.text().strip()),
-                ('genre', genre_edit.text().strip())
-            ]
+        def start_download():
+            url = url_edit.text().strip()
+            if not url:
+                QMessageBox.warning(dialog, "Error", "Please enter a YouTube URL")
+                return
             
-            success = True
-            for field, value in updates:
-                if not self.db.update_song_metadata(song_id, field, value):
-                    success = False
-                    break
+            if not ("youtube.com" in url or "youtu.be" in url):
+                QMessageBox.warning(dialog, "Error", "Please enter a valid YouTube URL")
+                return
             
-            if success:
-                # Refresh the library to show changes
-                self.refresh_library()
-                dialog.accept()
-            else:
-                QMessageBox.warning(dialog, "Error", "Failed to save changes to database.")
+            # Show what will be downloaded
+            if 'list=' in url and 'v=' in url:
+                video_id = url.split('v=')[1].split('&')[0]
+                clean_url = f"https://www.youtube.com/watch?v={video_id}"
+                
+                reply = QMessageBox.question(dialog, "Playlist URL Detected", 
+                                           f"You entered a playlist URL, but only the individual video will be downloaded.\n\n"
+                                           f"Video ID: {video_id}\n"
+                                           f"Clean URL: {clean_url}\n\n"
+                                           f"Do you want to continue with downloading just this video?",
+                                           QMessageBox.Yes | QMessageBox.No)
+                if reply != QMessageBox.Yes:
+                    return
+            
+            dialog.accept()
+            self.start_youtube_download(url)
         
-        save_btn.clicked.connect(save_changes)
-        cancel_btn.clicked.connect(dialog.reject)        
+        download_btn.clicked.connect(start_download)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        # Focus on URL input and enable Enter key
+        url_edit.setFocus()
+        url_edit.returnPressed.connect(start_download)
+        
         dialog.exec_()
+
+    def start_youtube_download(self, url):
+        """Start YouTube download with progress dialog"""
+        progress_dialog = QProgressDialog("Preparing download...", "Cancel", 0, 100, self)
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setWindowTitle("YouTube Download")
+        progress_dialog.setAutoClose(False)  # Don't auto-close on completion
+        progress_dialog.show()
+        
+        # Create download thread
+        self.download_thread = YouTubeDownloadThread(url, self.organizer.musics_folder)
+        
+        # Connect signals directly to thread
+        self.download_thread.progress.connect(
+            lambda status, percent: self._update_download_progress(progress_dialog, status, percent)
+        )
+        self.download_thread.finished.connect(
+            lambda file_path, metadata: self.on_youtube_download_finished(file_path, metadata, progress_dialog)
+        )
+        self.download_thread.error.connect(
+            lambda error: self.on_youtube_download_error(error, progress_dialog)
+        )
+        
+        # Handle cancel
+        def on_cancel():
+            if hasattr(self, 'download_thread') and self.download_thread.isRunning():
+                progress_dialog.setLabelText("Cancelling download...")
+                self.download_thread.terminate()
+                self.download_thread.wait(3000)  # Wait up to 3 seconds
+            progress_dialog.close()
+        
+        progress_dialog.canceled.connect(on_cancel)
+        
+        # Start download
+        self.download_thread.start()
+
+    def _update_download_progress(self, progress_dialog, status, percent):
+        """Update the progress dialog with download status"""
+        progress_dialog.setLabelText(status)
+        progress_dialog.setValue(percent)
+        
+        # Process events to ensure UI updates
+        QApplication.processEvents()
+
+    # Update the on_youtube_download_finished method around line 1620
+
+    def on_youtube_download_finished(self, file_path, metadata, progress_dialog):
+        """Handle YouTube download completion"""
+        progress_dialog.setLabelText("Adding to library...")
+        progress_dialog.setValue(100)
+        QApplication.processEvents()
+        
+        try:
+            # Verify the file actually exists and is accessible
+            if not os.path.exists(file_path):
+                raise Exception(f"Downloaded file not found: {file_path}")
+            
+            # Check if file is empty or too small
+            file_size = os.path.getsize(file_path)
+            if file_size < 1024:  # Less than 1KB
+                raise Exception(f"Downloaded file is too small ({file_size} bytes)")
+            
+            # Add to database with YouTube metadata
+            song_data = (
+                metadata['title'],
+                metadata['artist'],
+                metadata['album'],
+                metadata['year'],
+                metadata['genre'],
+                metadata['duration'],
+                file_path,
+                metadata['album_art'],
+                metadata['source'],  # 'youtube'
+                metadata.get('youtube_url', ''),
+                metadata.get('youtube_id', '')
+            )
+            
+            if self.db.add_song(song_data):
+                progress_dialog.close()
+                self.refresh_library()
+                
+                # Show success message with file info
+                file_size_mb = file_size / (1024 * 1024)
+                QMessageBox.information(self, "Download Complete", 
+                                    f"Successfully downloaded: {metadata['title']}\n"
+                                    f"By: {metadata['artist']}\n"
+                                    f"File size: {file_size_mb:.1f} MB\n"
+                                    f"Location: {os.path.relpath(file_path, self.organizer.base_path)}\n\n"
+                                    f"Added to library under 'YouTube Downloads'")
+            else:
+                progress_dialog.close()
+                QMessageBox.warning(self, "Error", "Failed to add downloaded song to library")
+                
+        except Exception as e:
+            progress_dialog.close()
+            error_msg = f"Error processing downloaded file: {str(e)}"
+            print(f"❌ {error_msg}")
+            
+            # Show detailed error with troubleshooting tips
+            QMessageBox.critical(self, "Download Processing Error", 
+                            f"{error_msg}\n\n"
+                            f"Troubleshooting:\n"
+                            f"• Check if the file exists in the YouTube Downloads folder\n"
+                            f"• Verify the file isn't corrupted or empty\n"
+                            f"• Try downloading the video again\n"
+                            f"• Check available disk space")
+
+    def on_youtube_download_error(self, error, progress_dialog):
+        """Handle YouTube download error"""
+        progress_dialog.close()
+        QMessageBox.critical(self, "Download Failed", 
+                       f"YouTube download failed:\n\n{error}\n\n"
+                       f"Common issues:\n"
+                       f"• Video may be private or unavailable\n"
+                       f"• Network connection problems\n"
+                       f"• Geographic restrictions\n"
+                       f"• yt-dlp needs to be updated")
 
     def create_playlist_dialog(self):
         """Show dialog to create a new playlist"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("Create Playlist")
-        dialog.setFixedSize(400, 250)
+        dialog.setWindowTitle("Create New Playlist")
+        dialog.setFixedSize(400, 200)
         dialog.setStyleSheet("""
             QDialog {
                 background-color: #191414;
@@ -1806,7 +1893,6 @@ class LocalSpotifyQt(QMainWindow):
                 padding: 8px 16px;
                 font-size: 12px;
                 font-weight: bold;
-                min-width: 80px;
             }
             QPushButton:hover {
                 background-color: #1ed760;
@@ -1821,22 +1907,27 @@ class LocalSpotifyQt(QMainWindow):
         
         layout = QVBoxLayout(dialog)
         
-        # Name entry
+        # Title
+        title_label = QLabel("📝 Create New Playlist")
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+        
+        # Playlist name
         layout.addWidget(QLabel("Playlist Name:"))
         name_edit = QLineEdit()
         name_edit.setPlaceholderText("Enter playlist name...")
         layout.addWidget(name_edit)
         
-        # Description entry
+        # Description
         layout.addWidget(QLabel("Description (optional):"))
         desc_edit = QTextEdit()
+        desc_edit.setMaximumHeight(60)
         desc_edit.setPlaceholderText("Enter playlist description...")
-        desc_edit.setMaximumHeight(80)
         layout.addWidget(desc_edit)
         
         # Buttons
         button_layout = QHBoxLayout()
-        create_btn = QPushButton("Create")
+        create_btn = QPushButton("📝 Create Playlist")
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelButton")
         
@@ -1852,416 +1943,35 @@ class LocalSpotifyQt(QMainWindow):
             
             description = desc_edit.toPlainText().strip()
             
-            if self.db.create_playlist(name, description):
-                self.refresh_playlists()
-                QMessageBox.information(dialog, "Success", f"Playlist '{name}' created successfully!")
+            playlist_id = self.db.create_playlist(name, description)
+            if playlist_id:
                 dialog.accept()
+                self.refresh_playlists()
+                QMessageBox.information(self, "Success", f"Playlist '{name}' created successfully!")
             else:
                 QMessageBox.warning(dialog, "Error", "Playlist name already exists")
-        
+    
         create_btn.clicked.connect(create_playlist)
         cancel_btn.clicked.connect(dialog.reject)
         
-        # Focus on name entry
+        # Focus on name input
         name_edit.setFocus()
+        name_edit.returnPressed.connect(create_playlist)
         
         dialog.exec_()
 
-    def add_to_playlist_dialog(self):
-        """Show dialog to add song to playlist"""
-        current_row = self.music_table.currentRow()
-        if current_row < 0:
-            return
-        
-        song_id = self.music_table.item(current_row, 0).data(Qt.UserRole)
-        playlists = self.db.get_playlists()
-        
-        if not playlists:
-            reply = QMessageBox.question(self, "No Playlists", 
-                                       "No playlists found. Would you like to create one?",
-                                       QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                self.create_playlist_dialog()
-            return
-        
-        # Create playlist selection dialog
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Add to Playlist")
-        dialog.setFixedSize(300, 200)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #191414;
-                color: #FFFFFF;
-            }
-            QLabel {
-                color: #FFFFFF;
-                font-size: 12px;
-            }
-            QListWidget {
-                background-color: #282828;
-                color: #FFFFFF;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                padding: 4px;
-                border-radius: 2px;
-            }
-            QListWidget::item:selected {
-                background-color: #1DB954;
-            }
-            QPushButton {
-                background-color: #1DB954;
-                color: #FFFFFF;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1ed760;
-            }
-        """)
-        
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Select playlist:"))
-        
-        playlist_list = QListWidget()
-        for playlist in playlists:
-            playlist_list.addItem(playlist[1])  # playlist name
-        layout.addWidget(playlist_list)
-        
-        button_layout = QHBoxLayout()
-        add_btn = QPushButton("Add")
-        cancel_btn = QPushButton("Cancel")
-        button_layout.addWidget(add_btn)
-        button_layout.addWidget(cancel_btn)
-        layout.addLayout(button_layout)
-        
-        def add_to_selected_playlist():
-            current_item = playlist_list.currentItem()
-            if current_item:
-                playlist_name = current_item.text()
-                # Find playlist ID
-                for playlist in playlists:
-                    if playlist[1] == playlist_name:
-                        playlist_id = playlist[0]
-                        if self.db.add_song_to_playlist(playlist_id, song_id):
-                            QMessageBox.information(dialog, "Success", 
-                                                  f"Song added to '{playlist_name}' playlist!")
-                            dialog.accept()
-                        else:
-                            QMessageBox.warning(dialog, "Error", 
-                                              "Failed to add song to playlist.")
-                        break
-        
-        add_btn.clicked.connect(add_to_selected_playlist)
-        cancel_btn.clicked.connect(dialog.reject)
-        dialog.exec_()
-    
-    def toggle_play_pause(self):
-        """Toggle between play and pause"""
-        current_state = self.player.player.state()
-        
-        if current_state == QMediaPlayer.PlayingState:
-            # Currently playing, so pause
-            self.player.pause()
-            self.play_pause_btn.setText("▶")
-            self.play_pause_btn.setToolTip("Play")
-            print("⏸️ Paused playback")
-            
-        elif current_state == QMediaPlayer.PausedState:
-            # Currently paused, so resume
-            self.player.play()
-            self.play_pause_btn.setText("⏸")
-            self.play_pause_btn.setToolTip("Pause")
-            print("▶️ Resumed playback")
-            
-        else:
-            # Not playing anything, start playback
-            if self.current_song_data:
-                # Resume current song
-                self.player.play()
-                self.play_pause_btn.setText("⏸")
-                self.play_pause_btn.setToolTip("Pause")
-                print("▶️ Started playback")
-            else:
-                # No song selected, play first song if available
-                if self.music_table.rowCount() > 0:
-                    self.music_table.selectRow(0)
-                    self.play_selected_song(0)
-
-    def previous_song(self):
-        """Play the previous song"""
-        if self.music_table.rowCount() == 0:
-            return
-        
-        if self.shuffle_mode and self.shuffled_playlist_order:
-            # Find current song in shuffled order
-            current_song_id = None
-            if self.current_song_data:
-                current_song_id = self.current_song_data[0]
-            
-            current_shuffle_index = -1
-            for i, (row, song_id) in enumerate(self.shuffled_playlist_order):
-                if song_id == current_song_id:
-                    current_shuffle_index = i
-                    break
-            
-            if current_shuffle_index > 0:
-                prev_row, prev_song_id = self.shuffled_playlist_order[current_shuffle_index - 1]
-                self.music_table.selectRow(prev_row)
-                self.play_selected_song()
-            elif self.repeat_mode == "all":
-                # Go to last song in shuffle order
-                last_row, last_song_id = self.shuffled_playlist_order[-1]
-                self.music_table.selectRow(last_row)
-                self.play_selected_song()
-        else:
-            # Normal sequential mode
-            current_row = self.music_table.currentRow()
-            if current_row > 0:
-                self.music_table.selectRow(current_row - 1)
-                self.play_selected_song()
-            elif self.repeat_mode == "all":
-                # Go to last song
-                self.music_table.selectRow(self.music_table.rowCount() - 1)
-                self.play_selected_song()
-    
-    def next_song(self):
-        """Play the next song"""
-        if self.music_table.rowCount() == 0:
-            return
-        
-        if self.shuffle_mode and self.shuffled_playlist_order:
-            # Find current song in shuffled order
-            current_song_id = None
-            if self.current_song_data:
-                current_song_id = self.current_song_data[0]
-            
-            current_shuffle_index = -1
-            for i, (row, song_id) in enumerate(self.shuffled_playlist_order):
-                if song_id == current_song_id:
-                    current_shuffle_index = i
-                    break
-            
-            if current_shuffle_index >= 0 and current_shuffle_index < len(self.shuffled_playlist_order) - 1:
-                next_row, next_song_id = self.shuffled_playlist_order[current_shuffle_index + 1]
-                self.music_table.selectRow(next_row)
-                self.play_selected_song()
-            elif self.repeat_mode == "all":
-                # Go to first song in shuffle order
-                first_row, first_song_id = self.shuffled_playlist_order[0]
-                self.music_table.selectRow(first_row)
-                self.play_selected_song()
-        else:
-            # Normal sequential mode
-            current_row = self.music_table.currentRow()
-            if current_row < self.music_table.rowCount() - 1:
-                self.music_table.selectRow(current_row + 1)
-                self.play_selected_song()
-            elif self.repeat_mode == "all":                # Go to first song
-                self.music_table.selectRow(0)
-                self.play_selected_song()
-    
-    def toggle_shuffle(self):
-        """Toggle shuffle mode"""
-        self.shuffle_mode = not self.shuffle_mode
-        
-        if self.shuffle_mode:
-            # Enable shuffle mode
-            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("#404040", "#1DB954"))
-            self.shuffle_btn.setToolTip("Shuffle: ON - Songs will play in random order")
-            print("🔀 Shuffle mode enabled")
-            
-            # Create shuffled playlist order if we have songs
-            if self.music_table.rowCount() > 0:
-                self.create_shuffled_playlist()
-        else:
-            # Disable shuffle mode
-            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("#1DB954", "#404040"))
-            self.shuffle_btn.setToolTip("Shuffle: OFF - Songs will play in order")
-            print("📄 Shuffle mode disabled")
-            
-            # Clear shuffled playlist
-            self.shuffled_playlist_order = []
-    
-    def create_shuffled_playlist(self):
-        """Create a shuffled order of current playlist"""
-        # Get all song IDs from the current table
-        song_ids = []
-        for row in range(self.music_table.rowCount()):
-            song_id = self.music_table.item(row, 0).data(Qt.UserRole)
-            if song_id:
-                song_ids.append((row, song_id))
-          # Shuffle the list while keeping track of original positions
-        self.shuffled_playlist_order = song_ids.copy()
-        random.shuffle(self.shuffled_playlist_order)
-        print(f"🎲 Created shuffled playlist with {len(self.shuffled_playlist_order)} songs")
-    
-    def toggle_repeat(self):
-        """Toggle repeat mode"""
-        if self.repeat_mode == "off":
-            self.repeat_mode = "all"
-            self.repeat_btn.setText("🔁")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#404040", "#1DB954"))
-            self.repeat_btn.setToolTip("Repeat: ALL - Will repeat entire playlist")
-            print("🔁 Repeat all enabled")
-        elif self.repeat_mode == "all":
-            self.repeat_mode = "one"
-            self.repeat_btn.setText("🔂")
-            self.repeat_btn.setToolTip("Repeat: ONE - Will repeat current song")
-            print("🔂 Repeat one enabled")
-        else:
-            self.repeat_mode = "off"
-            self.repeat_btn.setText("🔁")
-            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#1DB954", "#404040"))
-            self.repeat_btn.setToolTip("Repeat: OFF")
-            print("⏹️ Repeat disabled")
-    
-    def format_duration(self, duration):
-        """Format duration in seconds to mm:ss format"""
-        if duration is None or duration <= 0:
-            return "0:00"
-        
-        minutes = int(duration // 60)
-        seconds = int(duration % 60)
-        return f"{minutes}:{seconds:02d}"
-    
-    def update_position(self, position):
-        """Update playback position"""
-        if not self.slider_pressed:
-            # Convert milliseconds to seconds for slider
-            seconds = position // 1000
-            self.progress_slider.setValue(seconds)
-            self.time_label.setText(self.format_duration(seconds))
-
-    def update_duration(self, duration):
-        """Update song duration"""
-        seconds = duration // 1000
-        self.progress_slider.setMaximum(seconds)
-        self.duration_label.setText(self.format_duration(seconds))
-
-    def update_current_song_display(self):
-        """Update the current song display"""
-        if self.current_song_data:
-            title = self.current_song_data[1] or "Unknown Title"
-            artist = self.current_song_data[2] or "Unknown Artist"
-            
-            self.current_title_label.setText(title)
-            self.current_artist_label.setText(artist)
-            # Remove this line - current_song_label doesn't exist:
-            # self.current_song_label.setText(f"♪ {title} - {artist}")
-
-    def play_selected_song(self, row=None):
-        """Play the currently selected song"""
-        if row is None:
-            current_row = self.music_table.currentRow()
-        else:
-            current_row = row
-            # Select the row in the table
-            self.music_table.selectRow(current_row)
-        
-        if current_row < 0:
-            return
-        
-        # Get song ID from the table
-        song_id = self.music_table.item(current_row, 0).data(Qt.UserRole)
-        
-        # Get full song data from database
+    def refresh_library(self):
+        """Refresh the music library display"""
         songs = self.db.get_all_songs()
-        for song in songs:
-            if song[0] == song_id:
-                self.current_song_data = song
-                break
-        
-        if self.current_song_data:
-            file_path = self.current_song_data[7]  # file_path is at index 7
-            
-            if os.path.exists(file_path):
-                if self.player.load_song(file_path):
-                    self.player.play()
-                    self.update_current_song_display()
-                    # Button will be updated by the state change signal
-                    print(f"🎵 Now playing: {self.current_song_data[1]} - {self.current_song_data[2]}")
-                else:
-                    QMessageBox.critical(self, "Error", "Failed to load song")
-            else:
-                QMessageBox.critical(self, "Error", "Song file not found")
-    
-    def on_player_state_changed(self, state):
-        """Handle player state changes"""
-        # Update play button based on state
-        self.update_play_button(state)
-        
-        if state == QMediaPlayer.StoppedState:
-            # Check if it's an error or natural end
-            if self.player.player.error() != QMediaPlayer.NoError:
-                error_string = self.player.player.errorString()
-                print(f"⚠️ Playback error: {error_string}")
-                # Try next song on error
-                self.next_song()
-                return
-            
-            # Song finished naturally, handle repeat/next
-            if self.repeat_mode == "one":
-                self.play_selected_song()
-            elif self.repeat_mode == "all":
-                self.next_song()
-            # If repeat is off, just stop (button already updated above)
-    
-    def on_progress_slider_moved(self, position):
-        """Handle progress slider movement"""
-        self.player.player.setPosition(position * 1000)
-    
-    def on_progress_slider_pressed(self):
-        """Handle progress slider press - pause updates to avoid conflicts"""
-        self.slider_pressed = True
-    
-    def on_progress_slider_released(self):
-        """Handle progress slider release - resume updates"""
-        self.slider_pressed = False
-        position = self.progress_slider.value()
-        self.player.player.setPosition(position * 1000)
-    
-    def update_play_button(self, state):
-        """Update play button based on player state"""
-        if state == QMediaPlayer.PlayingState:
-            self.play_pause_btn.setText("⏸")
-            self.play_pause_btn.setToolTip("Pause")
-        elif state == QMediaPlayer.PausedState:
-            self.play_pause_btn.setText("▶")
-            self.play_pause_btn.setToolTip("Play")
-        else:  # StoppedState
-            self.play_pause_btn.setText("▶")
-            self.play_pause_btn.setToolTip("Play")
-    
-    def on_playlist_select(self, item):
-        """Handle playlist selection"""
-        playlist_name = item.text()
-        try:
-            # Get playlist ID from name
-            playlists = self.db.get_playlists()
-            playlist_id = None
-            for pid, name, desc in playlists:
-                if name == playlist_name:
-                    playlist_id = pid
-                    break
-            
-            if playlist_id:
-                songs = self.db.get_playlist_songs(playlist_id)
-                self.load_songs_to_table(songs)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to load playlist: {e}")
-    
-    def load_songs_to_table(self, songs):
-        """Load songs into the music table"""
         self.music_table.setRowCount(len(songs))
-        
+    
         for row, song in enumerate(songs):
-            song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song
+            # Handle both old format (10 fields) and new format (13 fields)
+            if len(song) >= 13:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added, source, youtube_url, youtube_id = song[:13]
+            else:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song[:10]
+                source = 'local'
             
             # Create table items
             title_item = QTableWidgetItem(title)
@@ -2269,42 +1979,353 @@ class LocalSpotifyQt(QMainWindow):
             album_item = QTableWidgetItem(album)
             duration_item = QTableWidgetItem(self.format_duration(duration))
             
-            # Set item flags - only Artist and Album are editable
-            title_item.setFlags(title_item.flags() & ~Qt.ItemIsEditable)
-            artist_item.setFlags(artist_item.flags() | Qt.ItemIsEditable)
-            album_item.setFlags(album_item.flags() | Qt.ItemIsEditable)
-            duration_item.setFlags(duration_item.flags() & ~Qt.ItemIsEditable)
+            # Add visual indicators for YouTube downloads
+            if source == 'youtube' or 'YouTube' in album:
+                title_item.setText(f"🎵 {title}")
+                title_item.setToolTip("Downloaded from YouTube")
+                artist_item.setToolTip(f"YouTube Channel: {artist}")
+            
+            # Store song ID in the first item
+            title_item.setData(Qt.UserRole, song_id)
+            
+            # Set items in table
+            self.music_table.setItem(row, 0, title_item)
+            self.music_table.setItem(row, 1, artist_item)
+            self.music_table.setItem(row, 2, album_item)
+            self.music_table.setItem(row, 3, duration_item)
+        
+        # Update status
+        self.statusBar().showMessage(f"Library: {len(songs)} songs")
+
+    def refresh_playlists(self):
+        """Refresh the playlists display"""
+        self.playlist_list.clear()
+        playlists = self.db.get_playlists()
+        
+        for playlist in playlists:
+            playlist_id, name, description, created_date = playlist
+            item = QListWidgetItem(f"📝 {name}")
+            item.setData(Qt.UserRole, playlist_id)
+            item.setToolTip(description if description else f"Playlist: {name}")
+            self.playlist_list.addItem(item)
+
+    def show_library(self):
+        """Show the main library view"""
+        self.view_title.setText("Music Library")
+        # Clear current playlist to show all songs
+        self.current_playlist = []
+        self.refresh_library()
+
+    def on_search(self, query):
+        """Handle search input"""
+        if not query.strip():
+            self.refresh_library()
+            return
+        
+        songs = self.db.search_songs(query)
+        self.music_table.setRowCount(len(songs))
+        
+        for row, song in enumerate(songs):
+            # Handle both old format (10 fields) and new format (13 fields)
+            if len(song) >= 13:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added, source, youtube_url, youtube_id = song[:13]
+            else:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song[:10]
+                source = 'local'
+            
+            title_item = QTableWidgetItem(title)
+            artist_item = QTableWidgetItem(artist)
+            album_item = QTableWidgetItem(album)
+            duration_item = QTableWidgetItem(self.format_duration(duration))
+            
+            # Add visual indicators for YouTube downloads
+            if source == 'youtube' or 'YouTube' in album:
+                title_item.setText(f"🎵 {title}")
+                title_item.setToolTip("Downloaded from YouTube")
+            
+            title_item.setData(Qt.UserRole, song_id)
             
             self.music_table.setItem(row, 0, title_item)
             self.music_table.setItem(row, 1, artist_item)
             self.music_table.setItem(row, 2, album_item)
             self.music_table.setItem(row, 3, duration_item)
+
+    def on_song_double_click(self, row, column):
+        """Handle double-clicking on a song"""
+        if row < self.music_table.rowCount():
+            song_id = self.music_table.item(row, 0).data(Qt.UserRole)
+            # Find the song data
+            songs = self.db.get_all_songs()
+            for song in songs:
+                if song[0] == song_id:
+                    self.play_song(song)
+                    break
+
+    def play_song(self, song_data):
+        """Play a specific song"""
+        try:
+            # Handle both old format (10 fields) and new format (13 fields)
+            if len(song_data) >= 13:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added, source, youtube_url, youtube_id = song_data[:13]
+            else:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song_data[:10]
             
-            # Store song ID for later use
+            # Check if file exists
+            if not os.path.exists(file_path):
+                QMessageBox.warning(self, "File Not Found", 
+                                  f"The file '{os.path.basename(file_path)}' could not be found.\n"
+                                  f"It may have been moved or deleted.")
+                return
+            
+            # Load and play the song
+            if self.player.load_song(file_path):
+                self.player.play()
+                self.current_song_data = song_data
+                
+                # Update UI
+                self.current_title_label.setText(title)
+                self.current_artist_label.setText(artist)
+                self.play_pause_btn.setText("⏸")
+                
+                # Load album art if available
+                if album_art:
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(album_art)
+                    scaled_pixmap = pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.album_art_label.setPixmap(scaled_pixmap)
+                else:
+                    self.album_art_label.setText("♪")
+                    self.album_art_label.setPixmap(QPixmap())
+                
+                self.statusBar().showMessage(f"Playing: {title} - {artist}")
+            else:
+                QMessageBox.warning(self, "Playback Error", "Could not load the audio file.")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error playing song: {str(e)}")
+
+    def format_duration(self, duration):
+        """Format duration in seconds to MM:SS format"""
+        if duration is None or duration == 0:
+            return "0:00"
+        
+        minutes = int(duration // 60)
+        seconds = int(duration % 60)
+        return f"{minutes}:{seconds:02d}"
+
+    def cleanup_missing_files(self):
+        """Clean up database entries for missing files"""
+        if hasattr(self.organizer, 'musics_folder'):
+
+            removed_count = self.db.cleanup_missing_files(self.organizer.musics_folder)
+            if removed_count > 0:
+                print(f"🧹 Cleaned up {removed_count} missing files from database")
+
+    def show_context_menu(self, position):
+        """Show context menu for music table"""
+        if self.music_table.itemAt(position) is None:
+            return
+        
+        menu = QMenu(self)
+        
+        # Add actions
+        play_action = menu.addAction("▶ Play")
+        menu.addSeparator()
+        edit_action = menu.addAction("✏️ Edit Metadata")
+        menu.addSeparator()
+        remove_action = menu.addAction("🗑️ Remove from Library")
+        
+        # Execute menu
+        action = menu.exec_(self.music_table.mapToGlobal(position))
+        
+        if action == play_action:
+            row = self.music_table.currentRow()
+            self.on_song_double_click(row, 0)
+        elif action == remove_action:
+            self.remove_selected_song()
+
+    def remove_selected_song(self):
+        """Remove selected song from library"""
+        current_row = self.music_table.currentRow()
+        if current_row < 0:
+            return
+        
+        song_id = self.music_table.item(current_row, 0).data(Qt.UserRole)
+        title = self.music_table.item(current_row, 0).text()
+        
+        reply = QMessageBox.question(self, "Remove Song", 
+                                    f"Are you sure you want to remove '{title}' from the library?\n\n"
+                                    f"This will not delete the actual file.")
+        
+        if reply == QMessageBox.Yes:
+            if self.db.remove_song(song_id):
+                self.refresh_library()
+                self.statusBar().showMessage(f"Removed: {title}")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to remove song from library")
+
+    def on_table_item_changed(self, item):
+        """Handle table item changes (metadata editing)"""
+        if item.column() not in [1, 2]:  # Only allow editing Artist and Album
+            return
+        
+        song_id = self.music_table.item(item.row(), 0).data(Qt.UserRole)
+        new_value = item.text()
+        
+        # Determine field name
+        field_map = {1: 'artist', 2: 'album'}
+        field = field_map.get(item.column())
+        
+        if field and self.db.update_song_metadata(song_id, field, new_value):
+            self.statusBar().showMessage(f"Updated {field}: {new_value}")
+        else:
+            QMessageBox.warning(self, "Error", f"Failed to update {field}")
+
+    def on_playlist_select(self, item):
+        """Handle playlist selection"""
+        playlist_id = item.data(Qt.UserRole)
+        playlist_name = item.text().replace("📝 ", "")
+        
+        # Load playlist songs
+        songs = self.db.get_playlist_songs(playlist_id)
+        self.view_title.setText(f"Playlist: {playlist_name}")
+        
+        # Display songs
+        self.music_table.setRowCount(len(songs))
+        for row, song in enumerate(songs):
+            # Handle both old format and new format
+            if len(song) >= 13:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added, source, youtube_url, youtube_id = song[:13]
+            else:
+                song_id, title, artist, album, year, genre, duration, file_path, album_art, date_added = song[:10]
+                source = 'local'
+            
+            title_item = QTableWidgetItem(title)
+            artist_item = QTableWidgetItem(artist)
+            album_item = QTableWidgetItem(album)
+            duration_item = QTableWidgetItem(self.format_duration(duration))
+            
+            # Add visual indicators for YouTube downloads
+            if source == 'youtube' or 'YouTube' in album:
+                title_item.setText(f"🎵 {title}")
+                title_item.setToolTip("Downloaded from YouTube")
+            
             title_item.setData(Qt.UserRole, song_id)
+            
+            self.music_table.setItem(row, 0, title_item)
+            self.music_table.setItem(row, 1, artist_item)
+            self.music_table.setItem(row, 2, album_item)
+            self.music_table.setItem(row, 3, duration_item)
 
-    # ...existing code...
+    # Player control methods (note the proper indentation - these are part of the LocalSpotifyQt class)
+    def toggle_play_pause(self):
+        """Toggle play/pause"""
+        if self.player.is_playing():
+            self.player.pause()
+            self.play_pause_btn.setText("▶")
+        elif self.player.is_paused():
+            self.player.play()
+            self.play_pause_btn.setText("⏸")
+        else:
+            # No song loaded, play first song in library if available
+            if self.music_table.rowCount() > 0:
+                self.on_song_double_click(0, 0)
+
+    def next_song(self):
+        """Play next song"""
+        # Implementation for next song
+        pass
+
+    def previous_song(self):
+        """Play previous song"""
+        # Implementation for previous song
+        pass
+
+    def toggle_shuffle(self):
+        """Toggle shuffle mode"""
+        self.shuffle_mode = not self.shuffle_mode
+        if self.shuffle_mode:
+            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("#404040", "#1DB954"))
+        else:
+            self.shuffle_btn.setStyleSheet(self.shuffle_btn.styleSheet().replace("#1DB954", "#404040"))
+
+    def toggle_repeat(self):
+        """Toggle repeat mode"""
+        modes = ["off", "one", "all"]
+        current_index = modes.index(self.repeat_mode)
+        self.repeat_mode = modes[(current_index + 1) % len(modes)]
+        
+        if self.repeat_mode == "off":
+            self.repeat_btn.setText("🔁")
+            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#1DB954", "#404040"))
+        elif self.repeat_mode == "one":
+            self.repeat_btn.setText("🔂")
+            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#404040", "#1DB954"))
+        else:  # all
+            self.repeat_btn.setText("🔁")
+            self.repeat_btn.setStyleSheet(self.repeat_btn.styleSheet().replace("#404040", "#1DB954"))
+
+    def update_position(self, position):
+        """Update position display"""
+        if not self.slider_pressed:
+            self.progress_slider.setValue(position)
+        self.time_label.setText(self.format_duration(position / 1000))
+
+    def update_duration(self, duration):
+        """Update duration display"""
+        self.progress_slider.setRange(0, duration)
+        self.duration_label.setText(self.format_duration(duration / 1000))
+
+    def on_player_state_changed(self, state):
+        """Handle player state changes (VLC version)"""
+        if VLC_AVAILABLE:
+            # VLC states: 0=Stopped, 1=Playing, 2=Paused
+            if state == 1:  # Playing
+                self.play_pause_btn.setText("⏸")
+            else:  # Stopped or Paused
+                self.play_pause_btn.setText("▶")
+        else:
+            # Qt MediaPlayer states (fallback)
+            if state == QMediaPlayer.PlayingState:
+                self.play_pause_btn.setText("⏸")
+            else:
+                self.play_pause_btn.setText("▶")
+
+    def on_progress_slider_moved(self, position):
+        """Handle progress slider movement"""
+        self.player.set_position(position)
+
+    def on_progress_slider_pressed(self):
+        """Handle progress slider press"""
+        self.slider_pressed = True
+
+    def on_progress_slider_released(self):
+        """Handle progress slider release"""
+        self.slider_pressed = False
 
 
-def main():
-    """Main function to run the music player"""
+# Main execution block (this should be at the very end, OUTSIDE the class - no indentation)
+if __name__ == "__main__":
+    import sys
+    
+    # Create the QApplication
     app = QApplication(sys.argv)
+    
+    # Set application properties
     app.setApplicationName("Local Spotify Qt")
+    app.setApplicationVersion("1.0")
     app.setOrganizationName("Local Music Player")
     
-    # Set application icon (if available)
-    # app.setWindowIcon(QIcon('icon.png'))
-    
     try:
-        player = LocalSpotifyQt()
-        player.show()
+        # Create and show the main window
+        window = LocalSpotifyQt()
+        window.show()
+        
+        # Start the application event loop
         sys.exit(app.exec_())
+        
     except Exception as e:
-        print(f"Error starting application: {e}")
-        QMessageBox.critical(None, "Error", f"Failed to start application: {e}")
-
-
-if __name__ == "__main__":
-    main()
-
-
+        print(f"❌ Error starting application: {e}")
+        QMessageBox.critical(None, "Application Error", 
+                           f"Failed to start the application:\n{str(e)}")
+        sys.exit(1)
