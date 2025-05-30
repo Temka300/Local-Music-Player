@@ -18,12 +18,14 @@ from core.database import MusicDatabase
 from core.audio_player import AudioPlayer
 from core.organizer import MusicLibraryOrganizer
 from core.metadata import extract_metadata
+from core.album_art import AlbumArtExtractor, AlbumArtLabel
 from utils.themes import apply_dark_theme
 from utils.constants import YOUTUBE_AVAILABLE, YouTubeDownloadThread
 from workers.file_import_thread import FileImportThread, FolderScanThread
 from gui.widgets.editable_columns_delegate import EditableColumnsDelegate
 from gui.dialogs.create_playlist_dialog import CreatePlaylistDialog
 from gui.dialogs.youtube_download_dialog import YouTubeDownloadDialog
+from gui.widgets.scrolling_label import ScrollingLabel
 
 
 class LocalSpotifyQt(QMainWindow):
@@ -46,13 +48,11 @@ class LocalSpotifyQt(QMainWindow):
         self.current_playlist = []
         self.current_index = 0
         self.shuffle_mode = False
-        self.shuffled_playlist = []
         self.shuffle_index = 0
-        self.repeat_mode = "off"  # Can be "off", "one", "all"
+        self.shuffled_playlist = []  # Keep this one, remove the other
+        self.repeat_mode = "off"
         self.current_song_data = None
         self.slider_pressed = False
-        self.original_playlist_order = []
-        self.shuffled_playlist_order = []
         
         # Setup UI FIRST
         self.setup_ui()
@@ -224,11 +224,10 @@ class LocalSpotifyQt(QMainWindow):
         """Create the bottom player controls with centered layout"""
         # Main player container
         player_widget = QWidget()
-        player_widget.setFixedHeight(100)
+        player_widget.setFixedHeight(120)
         player_widget.setStyleSheet("""
             QWidget {
                 background-color: #181818;
-                border-top: 1px solid #333;
             }
         """)
         
@@ -237,28 +236,63 @@ class LocalSpotifyQt(QMainWindow):
         main_layout.setContentsMargins(15, 10, 15, 10)
         main_layout.setSpacing(20)
         
-        # === LEFT SECTION: Song Info ===
+        # === LEFT SECTION: Album Art + Song Info ===
         left_section = QWidget()
-        left_section.setFixedWidth(250)
+        left_section.setFixedWidth(380)
         left_layout = QHBoxLayout(left_section)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
+        left_layout.setSpacing(12)
         
-        # Song title
-        self.current_song_label = QLabel("No song playing")
-        self.current_song_label.setStyleSheet("color: #FFFFFF; font-size: 14px; font-weight: bold;")
+        # Album art
+        self.album_art_label = AlbumArtLabel(size=(80, 80))
+        left_layout.addWidget(self.album_art_label)
+        
+        # Song info container
+        song_info_container = QWidget()
+        song_info_layout = QVBoxLayout(song_info_container)
+        song_info_layout.setContentsMargins(0, 0, 0, 0)
+        song_info_layout.setSpacing(4)
+        
+        # Song title - USE SCROLLING LABEL
+        self.current_song_label = ScrollingLabel("No song playing")
+        self.current_song_label.setStyleSheet("""
+            QLabel {
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+        self.current_song_label.setMaximumHeight(36)
+        self.current_song_label.setMinimumWidth(200)
         
         # Artist info
         self.current_artist_label = QLabel("")
-        self.current_artist_label.setStyleSheet("color: #B3B3B3; font-size: 12px;")
+        self.current_artist_label.setStyleSheet("""
+            QLabel {
+                color: #B3B3B3;
+                font-size: 12px;
+            }
+        """)
+        self.current_artist_label.setWordWrap(True)
         
-        song_info_layout = QVBoxLayout()
+        # Album info
+        self.current_album_label = QLabel("")
+        self.current_album_label.setStyleSheet("""
+            QLabel {
+                color: #808080;
+                font-size: 11px;
+            }
+        """)
+        
         song_info_layout.addWidget(self.current_song_label)
         song_info_layout.addWidget(self.current_artist_label)
+        song_info_layout.addWidget(self.current_album_label)
+        song_info_layout.addStretch()
         
-        left_layout.addLayout(song_info_layout)
+        left_layout.addWidget(song_info_container)
         left_layout.addStretch()
-        
+
+
         # === CENTER SECTION: Controls ===
         center_section = QWidget()
         center_section.setFixedWidth(400)
@@ -299,19 +333,20 @@ class LocalSpotifyQt(QMainWindow):
         
         # Current time
         self.current_time_label = QLabel("0:00")
-        self.current_time_label.setStyleSheet("color: #B3B3B3; font-size: 11px;")
+        self.current_time_label.setStyleSheet("color: #B3B3B3; font-size: 11px; font-family: 'Consolas', monospace;")
         
         # Progress slider
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setStyleSheet("""
             QSlider::groove:horizontal { height: 4px; background: #404040; border-radius: 2px; }
             QSlider::handle:horizontal { background: #FFFFFF; width: 12px; height: 12px; border-radius: 6px; margin: -4px 0; }
+            QSlider::handle:horizontal:hover { background: #1DB954; }
             QSlider::sub-page:horizontal { background: #1DB954; border-radius: 2px; }
         """)
         
         # Total time
         self.total_time_label = QLabel("0:00")
-        self.total_time_label.setStyleSheet("color: #B3B3B3; font-size: 11px;")
+        self.total_time_label.setStyleSheet("color: #B3B3B3; font-size: 11px; font-family: 'Consolas', monospace;")
         
         progress_layout.addWidget(self.current_time_label)
         progress_layout.addWidget(self.position_slider)
@@ -340,6 +375,7 @@ class LocalSpotifyQt(QMainWindow):
         self.volume_slider.setStyleSheet("""
             QSlider::groove:horizontal { height: 4px; background: #404040; border-radius: 2px; }
             QSlider::handle:horizontal { background: #FFFFFF; width: 12px; height: 12px; border-radius: 6px; margin: -4px 0; }
+            QSlider::handle:horizontal:hover { background: #1DB954; }
             QSlider::sub-page:horizontal { background: #FFFFFF; border-radius: 2px; }
         """)
         
@@ -772,6 +808,15 @@ class LocalSpotifyQt(QMainWindow):
         if title_item:
             song_data = title_item.data(Qt.UserRole)
             if song_data:
+                # Update shuffle index if in shuffle mode
+                if self.shuffle_mode and self.shuffled_playlist:
+                    try:
+                        self.shuffle_index = self.shuffled_playlist.index(row)
+                        print(f"🔀 Updated shuffle index to {self.shuffle_index} for row {row}")
+                    except ValueError:
+                        # Row not in shuffle list, recreate shuffle
+                        self.create_shuffled_playlist()
+                
                 self.play_song(song_data)
 
     def play_song(self, song_data):
@@ -787,9 +832,21 @@ class LocalSpotifyQt(QMainWindow):
         # Update UI
         title = str(song_data[1]) if len(song_data) > 1 else "Unknown"
         artist = str(song_data[2]) if len(song_data) > 2 else "Unknown Artist"
+        album = str(song_data[3]) if len(song_data) > 3 else "Unknown Album"
         
+        # Update text labels - ScrollingLabel will handle long text automatically
+        print(f"🎵 Setting title: {title}")
         self.current_song_label.setText(title)
         self.current_artist_label.setText(artist)
+        self.current_album_label.setText(album)
+        
+        # Add tooltips for hover info
+        self.current_song_label.setToolTip(title)
+        self.current_artist_label.setToolTip(artist)
+        self.current_album_label.setToolTip(album)
+        
+        # Update album art
+        self.album_art_label.set_album_art_from_song_data(song_data)
         
         # Enable buttons now that we have a song
         self.update_button_states(has_song=True)
@@ -804,6 +861,14 @@ class LocalSpotifyQt(QMainWindow):
         
         self.statusBar().showMessage(f"Playing: {title} - {artist}")
     
+    def clear_current_song_display(self):
+        """Clear current song display when stopping"""
+        self.current_song_label.setText("No song playing")
+        self.current_artist_label.setText("")
+        self.current_album_label.setText("")
+        self.album_art_label.clear_art()
+        self.current_song_data = None
+
     def format_duration(self, duration):
         """Format duration in seconds to mm:ss"""
         if not duration or duration == 0:
@@ -1028,17 +1093,15 @@ class LocalSpotifyQt(QMainWindow):
             
             next_row = 0
             
-            if self.shuffle_mode and hasattr(self, 'shuffled_playlist') and self.shuffled_playlist:
+            if self.shuffle_mode and self.shuffled_playlist:
                 # Use shuffled playlist
                 self.shuffle_index += 1
                 
-                # If we've reached the end of shuffle list, reshuffle for repeat all
+                # If we've reached the end of shuffle list
                 if self.shuffle_index >= len(self.shuffled_playlist):
                     if self.repeat_mode == "all":
                         # Reshuffle and continue
-                        import random
-                        random.shuffle(self.shuffled_playlist)
-                        self.shuffle_index = 0
+                        self.create_shuffled_playlist()
                         print("🔀 Reshuffling playlist for repeat all")
                     else:
                         # End of shuffle, stop
@@ -1046,7 +1109,7 @@ class LocalSpotifyQt(QMainWindow):
                         return
                 
                 next_row = self.shuffled_playlist[self.shuffle_index]
-                print(f"🔀 Shuffle next: row {next_row}")
+                print(f"🔀 Shuffle next: row {next_row} (shuffle index: {self.shuffle_index})")
                 
             else:
                 # Normal sequential mode
@@ -1080,7 +1143,7 @@ class LocalSpotifyQt(QMainWindow):
             
             prev_row = 0
             
-            if self.shuffle_mode and hasattr(self, 'shuffled_playlist') and self.shuffled_playlist:
+            if self.shuffle_mode and self.shuffled_playlist:
                 # Use shuffled playlist
                 self.shuffle_index -= 1
                 
@@ -1089,7 +1152,7 @@ class LocalSpotifyQt(QMainWindow):
                     self.shuffle_index = len(self.shuffled_playlist) - 1
                 
                 prev_row = self.shuffled_playlist[self.shuffle_index]
-                print(f"🔀 Shuffle previous: row {prev_row}")
+                print(f"🔀 Shuffle previous: row {prev_row} (shuffle index: {self.shuffle_index})")
                 
             else:
                 # Normal sequential mode
@@ -1108,15 +1171,48 @@ class LocalSpotifyQt(QMainWindow):
             
         except Exception as e:
             print(f"❌ Error playing previous song: {e}")
-    
+
+    def create_shuffled_playlist(self):
+        """Create shuffled order for current playlist"""
+        import random
+        
+        # Get all rows from current table view
+        total_rows = self.music_table.rowCount()
+        if total_rows == 0:
+            self.shuffled_playlist = []
+            return
+        
+        # Create list of row indices
+        self.shuffled_playlist = list(range(total_rows))
+        
+        # Shuffle the list
+        random.shuffle(self.shuffled_playlist)
+        
+        # Find current playing song and move it to the front
+        current_row = self.music_table.currentRow()
+        if current_row >= 0 and current_row in self.shuffled_playlist:
+            # Move current song to front of shuffle
+            current_pos = self.shuffled_playlist.index(current_row)
+            self.shuffled_playlist[0], self.shuffled_playlist[current_pos] = \
+                self.shuffled_playlist[current_pos], self.shuffled_playlist[0]
+            self.shuffle_index = 0
+        else:
+            self.shuffle_index = 0
+        
+        print(f"🔀 Created shuffled playlist with {len(self.shuffled_playlist)} songs")
+
     def toggle_shuffle(self):
         """Toggle shuffle mode on/off"""
         self.shuffle_mode = not self.shuffle_mode
         
         if self.shuffle_mode:
+            # Create shuffled playlist from current table
+            self.create_shuffled_playlist()
             self.apply_green_button_style(self.shuffle_btn)
             print("🔀 Shuffle: ON")
         else:
+            self.shuffled_playlist = []  # Clear shuffle list
+            self.shuffle_index = 0
             self.apply_grey_button_style(self.shuffle_btn)
             print("🔀 Shuffle: OFF")
 
@@ -1186,18 +1282,6 @@ class LocalSpotifyQt(QMainWindow):
         """Update table selection to match current playing song"""
         if 0 <= index < self.music_table.rowCount():
             self.music_table.selectRow(index)
-    
-    def create_shuffled_playlist(self):
-        """Create shuffled order for current playlist"""
-        import random
-        if self.current_playlist:
-            self.shuffled_playlist_order = list(range(len(self.current_playlist)))
-            random.shuffle(self.shuffled_playlist_order)
-            # Ensure current song stays current
-            if self.current_index in self.shuffled_playlist_order:
-                current_shuffled_pos = self.shuffled_playlist_order.index(self.current_index)
-                self.shuffled_playlist_order[0], self.shuffled_playlist_order[current_shuffled_pos] = \
-                    self.shuffled_playlist_order[current_shuffled_pos], self.shuffled_playlist_order[0]
     
     def on_song_end(self):
         """Handle when song ends"""

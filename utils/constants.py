@@ -33,7 +33,7 @@ REPEAT_ALL = "all"
 
 # Application info
 APP_NAME = "Local Spotify"
-APP_VERSION = "1.10"
+APP_VERSION = "1.11"
 
 # Default settings
 DEFAULT_SETTINGS = {
