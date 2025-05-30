@@ -25,6 +25,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 
+
 # Import YouTube downloader
 try:
     from youtube_downloader import YouTubeDownloader, YouTubeDownloadThread
@@ -1107,7 +1108,6 @@ class LocalSpotifyQt(QMainWindow):
             }
             QPushButton:hover {
                 background-color: #1ED760;
-                /* Remove this line: transform: scale(1.05); */
             }
             QPushButton:pressed {
                 background-color: #169C46;
@@ -1213,58 +1213,115 @@ class LocalSpotifyQt(QMainWindow):
         center_layout.addLayout(progress_layout)
         player_layout.addLayout(center_layout)
         
-        # Right: Volume control (improved positioning)
-        volume_layout = QHBoxLayout()
+        # Right: Enhanced Volume control with better design and functionality
+        volume_layout = QVBoxLayout()
         volume_layout.setAlignment(Qt.AlignRight | Qt.AlignCenter)
-        volume_layout.setContentsMargins(10, 0, 0, 0)
-        volume_layout.setSpacing(8)
+        volume_layout.setContentsMargins(20, 0, 0, 0)
+        volume_layout.setSpacing(5)
         
-        self.volume_label = QLabel("🔊")
-        self.volume_label.setFixedSize(24, 24)
-        self.volume_label.setAlignment(Qt.AlignCenter)
-        self.volume_label.setStyleSheet("font-size: 16px; color: #B0B0B0;")
+        # Volume controls container
+        volume_controls_layout = QHBoxLayout()
+        volume_controls_layout.setSpacing(8)
+        volume_controls_layout.setAlignment(Qt.AlignCenter)
         
+        # Mute/Unmute button with dynamic icon
+        self.mute_btn = QPushButton("🔊")
+        self.mute_btn.setFixedSize(28, 28)
+        self.mute_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #404040;
+                border: none;
+                border-radius: 14px;
+                font-size: 14px;
+                color: #B0B0B0;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #1DB954;
+                color: #FFFFFF;
+            }
+            QPushButton:pressed {
+                background-color: #169C46;
+            }
+        """)
+        self.mute_btn.setToolTip("Mute/Unmute")
+        
+        # Volume slider with enhanced styling
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(70)
-        self.volume_slider.setFixedWidth(120)
-        self.volume_slider.setMaximumHeight(20)
+        self.volume_slider.setFixedWidth(140)
+        self.volume_slider.setMaximumHeight(25)
         self.volume_slider.setStyleSheet("""
             QSlider::groove:horizontal {
-                border: 1px solid #404040;
-                height: 8px;
-                background: #282828;
+                border: none;
+                height: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #404040, stop:1 #404040);
                 margin: 2px 0;
-                border-radius: 4px;
+                border-radius: 3px;
             }
             QSlider::handle:horizontal {
-                background: #1DB954;
-                border: 1px solid #1DB954;
-                width: 18px;
-                margin: -2px 0;
-                border-radius: 9px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1ED760, stop:1 #1DB954);
+                border: 2px solid #FFFFFF;
+                width: 16px;
+                height: 16px;
+                margin: -5px 0;
+                border-radius: 8px;
             }
             QSlider::handle:horizontal:hover {
-                background: #1ED760;
-                width: 20px;
-                height: 20px;
-                margin: -3px 0;
-                border-radius: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1ED760, stop:1 #1ED760);
+                width: 18px;
+                height: 18px;
+                margin: -6px 0;
+                border-radius: 9px;
+                border: 2px solid #FFFFFF;
             }
             QSlider::sub-page:horizontal {
-                background: #1DB954;
-                border-radius: 4px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1DB954, stop:1 #1ED760);
+                border-radius: 3px;
+            }
+            QSlider::add-page:horizontal {
+                background: #404040;
+                border-radius: 3px;
+            }
+        """)
+        self.volume_slider.setToolTip("Volume")
+        
+        volume_controls_layout.addWidget(self.mute_btn)
+        volume_controls_layout.addWidget(self.volume_slider)
+        
+        # Volume percentage label
+        self.volume_percentage_label = QLabel("70%")
+        self.volume_percentage_label.setFixedWidth(35)
+        self.volume_percentage_label.setAlignment(Qt.AlignCenter)
+        self.volume_percentage_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #B0B0B0;
+                font-weight: bold;
+                background-color: transparent;
+                border: none;
             }
         """)
         
-        volume_layout.addWidget(self.volume_label)
-        volume_layout.addWidget(self.volume_slider)
+        volume_layout.addLayout(volume_controls_layout)
+        volume_layout.addWidget(self.volume_percentage_label)
         
         player_layout.addLayout(volume_layout)
         
         player_dock.setWidget(player_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, player_dock)
+        
+        # Initialize volume state
+        self.is_muted = False
+        self.volume_before_mute = 70
     
+
+
     def create_menu_bar(self):
         """Create the menu bar"""
         menubar = self.menuBar()
@@ -1322,8 +1379,11 @@ class LocalSpotifyQt(QMainWindow):
         self.shuffle_btn.clicked.connect(self.toggle_shuffle)
         self.repeat_btn.clicked.connect(self.toggle_repeat)
         
-        # Volume
-        self.volume_slider.valueChanged.connect(self.player.set_volume)
+        # Enhanced Volume controls
+        self.volume_slider.valueChanged.connect(self.on_volume_changed)
+        self.volume_slider.sliderPressed.connect(self.on_volume_slider_pressed)
+        self.volume_slider.sliderReleased.connect(self.on_volume_slider_released)
+        self.mute_btn.clicked.connect(self.toggle_mute)
         
         # Player signals
         self.player.positionChanged.connect(self.update_position)
@@ -1336,6 +1396,99 @@ class LocalSpotifyQt(QMainWindow):
         # Playlist selection
         self.playlist_list.itemDoubleClicked.connect(self.on_playlist_select)
     
+    def on_volume_changed(self, value):
+        """Handle volume slider changes"""
+        if not self.is_muted:
+            self.player.set_volume(value)
+        
+        # Update volume percentage display
+        self.volume_percentage_label.setText(f"{value}%")
+        
+        # Update mute button icon based on volume level
+        if value == 0:
+            self.mute_btn.setText("🔇")
+            self.mute_btn.setToolTip("Unmute")
+        elif value < 33:
+            self.mute_btn.setText("🔈")
+            self.mute_btn.setToolTip("Mute")
+        elif value < 66:
+            self.mute_btn.setText("🔉")
+            self.mute_btn.setToolTip("Mute")
+        else:
+            self.mute_btn.setText("🔊")
+            self.mute_btn.setToolTip("Mute")
+        
+        # Store current volume if not muted
+        if not self.is_muted:
+            self.volume_before_mute = value
+        
+        # Show volume tooltip during adjustment
+        if hasattr(self, '_volume_tooltip_timer'):
+            self._volume_tooltip_timer.stop()
+        
+        # Create temporary tooltip effect
+        self.statusBar().showMessage(f"Volume: {value}%", 1000)
+
+    def on_volume_slider_pressed(self):
+        """Handle volume slider press"""
+        # Visual feedback when adjusting volume
+        self.volume_slider.setStyleSheet(self.volume_slider.styleSheet().replace(
+            "stop:1 #1DB954", "stop:1 #1ED760"
+        ))
+
+    def on_volume_slider_released(self):
+        """Handle volume slider release"""
+        # Reset visual feedback
+        self.volume_slider.setStyleSheet(self.volume_slider.styleSheet().replace(
+            "stop:1 #1ED760", "stop:1 #1DB954"
+        ))
+
+    def toggle_mute(self):
+        """Toggle mute/unmute"""
+        if self.is_muted:
+            # Unmute: restore previous volume
+            self.is_muted = False
+            self.volume_slider.setValue(self.volume_before_mute)
+            self.player.set_volume(self.volume_before_mute)
+            self.statusBar().showMessage(f"Unmuted - Volume: {self.volume_before_mute}%", 2000)
+            
+            # Update mute button style for unmuted state
+            self.mute_btn.setStyleSheet(self.mute_btn.styleSheet().replace(
+                "color: #1DB954", "color: #B0B0B0"
+            ))
+        else:
+            # Mute: store current volume and set to 0
+            self.volume_before_mute = self.volume_slider.value()
+            self.is_muted = True
+            self.player.set_volume(0)
+            self.statusBar().showMessage("Muted", 2000)
+            
+            # Update mute button style for muted state
+            self.mute_btn.setStyleSheet(self.mute_btn.styleSheet().replace(
+                "color: #B0B0B0", "color: #1DB954"
+            ))
+            
+            # Update mute button icon
+            self.mute_btn.setText("🔇")
+            self.mute_btn.setToolTip("Unmute")
+
+    def set_volume_shortcut(self, volume):
+        """Set volume to specific value (for potential keyboard shortcuts)"""
+        self.volume_slider.setValue(volume)
+        self.on_volume_changed(volume)
+
+    def increase_volume(self, amount=5):
+        """Increase volume by specified amount"""
+        current_volume = self.volume_slider.value()
+        new_volume = min(100, current_volume + amount)
+        self.set_volume_shortcut(new_volume)
+
+    def decrease_volume(self, amount=5):
+        """Decrease volume by specified amount"""
+        current_volume = self.volume_slider.value()
+        new_volume = max(0, current_volume - amount)
+        self.set_volume_shortcut(new_volume)
+
     def apply_dark_theme(self):
         """Apply dark theme styling"""
         self.setStyleSheet("""
