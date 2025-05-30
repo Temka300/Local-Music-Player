@@ -21,6 +21,12 @@ from core.organizer import MusicLibraryOrganizer
 from core.metadata import extract_metadata
 from core.album_art import AlbumArtExtractor, AlbumArtLabel
 from utils.themes import apply_dark_theme
+from utils.constants import (
+    APP_NAME, APP_VERSION, 
+    YOUTUBE_AVAILABLE, YouTubeDownloadThread,
+    AUDIO_FILE_FILTER
+)
+
 from utils.constants import YOUTUBE_AVAILABLE, YouTubeDownloadThread
 from workers.file_import_thread import FileImportThread, FolderScanThread
 from gui.widgets.editable_columns_delegate import EditableColumnsDelegate
@@ -34,7 +40,7 @@ class LocalSpotifyQt(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🎵 Local Spotify Qt - Music Player")
+        self.setWindowTitle(f"🎵 {APP_NAME}")
         self.setGeometry(100, 100, 1200, 800)
         
         # Initialize components
@@ -114,7 +120,7 @@ class LocalSpotifyQt(QMainWindow):
         sidebar_layout = QVBoxLayout(sidebar)
         
         # Title
-        title_label = QLabel("🎵 Local Spotify Qt")
+        title_label = QLabel(f"🎵 {APP_NAME}")
         title_label.setObjectName("title")
         sidebar_layout.addWidget(title_label)
         
