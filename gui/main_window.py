@@ -2,6 +2,7 @@
 Main window for the Local Spotify Qt application
 """
 
+import random
 import sys
 import os
 from pathlib import Path
@@ -50,7 +51,6 @@ class LocalSpotifyQt(QMainWindow):
         self.shuffle_mode = False
         self.shuffle_index = 0
         self.shuffled_playlist = []  # Keep this one, remove the other
-        self.repeat_mode = "off"
         self.current_song_data = None
         self.slider_pressed = False
         
@@ -1026,25 +1026,6 @@ class LocalSpotifyQt(QMainWindow):
             self.current_song_label.setText("No song playing")
             self.current_artist_label.setText("")
 
-    def on_volume_changed(self, value):
-        """Handle volume slider changes"""
-        try:
-            self.player.set_volume(value)
-            self.volume_label.setText(f"{value}%")
-            
-            # Update mute button icon based on volume
-            if value == 0:
-                self.mute_btn.setText("🔇")
-            elif value < 30:
-                self.mute_btn.setText("🔈")
-            elif value < 70:
-                self.mute_btn.setText("🔉")
-            else:
-                self.mute_btn.setText("🔊")
-                
-        except Exception as e:
-            print(f"❌ Volume error: {e}")
-
     def on_position_slider_moved(self, position):
         """Handle position slider movement"""
         if self.slider_pressed:
@@ -1201,6 +1182,19 @@ class LocalSpotifyQt(QMainWindow):
         
         print(f"🔀 Created shuffled playlist with {len(self.shuffled_playlist)} songs")
 
+    def toggle_mute(self):
+        """Toggle mute on/off"""
+        if self.volume_slider.value() == 0:
+            # Currently muted, restore previous volume
+            if hasattr(self, 'previous_volume'):
+                self.volume_slider.setValue(self.previous_volume)
+            else:
+                self.volume_slider.setValue(70)  # Default volume
+        else:
+            # Currently not muted, save current volume and mute
+            self.previous_volume = self.volume_slider.value()
+            self.volume_slider.setValue(0)
+
     def toggle_shuffle(self):
         """Toggle shuffle mode on/off"""
         self.shuffle_mode = not self.shuffle_mode
@@ -1342,25 +1336,6 @@ class LocalSpotifyQt(QMainWindow):
         else:
             self.mute_btn.setText("🔊")
     
-    def on_volume_slider_pressed(self):
-        """Handle volume slider press"""
-        pass
-    
-    def on_volume_slider_released(self):
-        """Handle volume slider release"""
-        pass
-    
-    def toggle_mute(self):
-        """Toggle mute"""
-        if not hasattr(self, '_previous_volume'):
-            self._previous_volume = 70
-        
-        if self.volume_slider.value() == 0:
-            self.volume_slider.setValue(self._previous_volume)
-        else:
-            self._previous_volume = self.volume_slider.value()
-            self.volume_slider.setValue(0)
-    
     def set_volume_shortcut(self, volume):
         """Set volume via keyboard shortcut"""
         self.volume_slider.setValue(volume)
@@ -1393,19 +1368,6 @@ class LocalSpotifyQt(QMainWindow):
         """Handle player state changes"""
         if state == 6:  # VLC Ended state
             self.on_song_end()
-    
-    def on_progress_slider_moved(self, position):
-        """Handle progress slider movement"""
-        if self.slider_pressed:
-            self.player.set_position(position)
-    
-    def on_progress_slider_pressed(self):
-        """Handle progress slider press"""
-        self.slider_pressed = True
-    
-    def on_progress_slider_released(self):
-        """Handle progress slider release"""
-        self.slider_pressed = False
     
     # Cleanup methods
     def cleanup_missing_files(self):
@@ -1461,54 +1423,3 @@ class LocalSpotifyQt(QMainWindow):
                 
         except Exception as e:
             print(f"❌ Error during double extension fix: {e}")
-    
-    def handle_song_ended(self):
-        """Handle when a song ends - implement repeat logic"""
-        try:
-            if self.repeat_mode == "one":
-                # Repeat current song
-                print("🔁 Repeating current song")
-                self.audio_player.set_position(0)  # Go back to start
-                self.audio_player.play()
-                
-            elif self.repeat_mode == "all":
-                # Play next song in playlist/library
-                print("🔁 Repeat all - playing next song")
-                self.next_song()
-                
-            else:  # repeat_mode == "off"
-                # Stop playback
-                print("⏹️ Song ended - stopping")
-                # Don't do anything, let it stay stopped
-                
-        except Exception as e:
-            print(f"❌ Error handling song end: {e}")
-
-
-    def toggle_repeat_mode(self):
-        """Toggle between repeat modes: off -> one -> all -> off"""
-        try:
-            if self.repeat_mode == "off":
-                self.repeat_mode = "one"
-                # Update repeat button appearance
-                if hasattr(self, 'repeat_button'):
-                    self.repeat_button.setText("🔂")  # Repeat one icon
-                    self.repeat_button.setToolTip("Repeat: One")
-                print("🔂 Repeat mode: One")
-                
-            elif self.repeat_mode == "one":
-                self.repeat_mode = "all"
-                if hasattr(self, 'repeat_button'):
-                    self.repeat_button.setText("🔁")  # Repeat all icon
-                    self.repeat_button.setToolTip("Repeat: All")
-                print("🔁 Repeat mode: All")
-                
-            else:  # self.repeat_mode == "all"
-                self.repeat_mode = "off"
-                if hasattr(self, 'repeat_button'):
-                    self.repeat_button.setText("↪️")  # No repeat icon
-                    self.repeat_button.setToolTip("Repeat: Off")
-                print("↪️ Repeat mode: Off")
-                
-        except Exception as e:
-            print(f"❌ Error toggling repeat mode: {e}")
