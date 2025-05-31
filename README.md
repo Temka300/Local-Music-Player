@@ -1,3 +1,4 @@
+Need to update this
 # 🎵 Local Spotify - Music Player for Local Files
 
 A comprehensive, Spotify-like music player for your local music collection. Built with Python and featuring a modern dark theme interface, complete music library management, and robust audio playback with advanced error handling.

@@ -23,11 +23,18 @@ from core.album_art import AlbumArtExtractor, AlbumArtLabel
 from utils.themes import apply_dark_theme
 from utils.constants import (
     APP_NAME, APP_VERSION, 
-    YOUTUBE_AVAILABLE, YouTubeDownloadThread,
     AUDIO_FILE_FILTER
 )
 
-from utils.constants import YOUTUBE_AVAILABLE, YouTubeDownloadThread
+# Import YouTube functionality directly
+try:
+    from core.youtube_downloader import YouTubeDownloadThread
+    YOUTUBE_AVAILABLE = True
+    print("✅ YouTube downloader available")
+except ImportError:
+    YOUTUBE_AVAILABLE = False
+    YouTubeDownloadThread = None
+    print("⚠️ YouTube downloader not available")
 from workers.file_import_thread import FileImportThread, FolderScanThread
 from gui.widgets.editable_columns_delegate import EditableColumnsDelegate
 from gui.dialogs.create_playlist_dialog import CreatePlaylistDialog
@@ -48,8 +55,9 @@ class LocalSpotifyQt(QMainWindow):
         self.player = AudioPlayer()
 
         # Initialize file organizer
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.organizer = MusicLibraryOrganizer(script_dir)
+        current_dir = os.path.dirname(os.path.abspath(__file__))  # This is gui/
+        parent_dir = os.path.dirname(current_dir)  # This is the main project directory
+        self.organizer = MusicLibraryOrganizer(parent_dir)  # Use parent_dir instead of current_dir
         
         # Application state (initialize before UI setup)
         self.current_playlist = []
@@ -631,60 +639,240 @@ class LocalSpotifyQt(QMainWindow):
         else:
             QMessageBox.warning(self, "Import Warning", "No new songs were imported.")
     
-    # YouTube download methods
+    # YouTube download methods    
     def youtube_download_dialog(self):
         """Show YouTube download dialog"""
         if not YOUTUBE_AVAILABLE:
-            QMessageBox.warning(self, "YouTube Unavailable", "YouTube downloader is not available.")
+            QMessageBox.warning(self, "YouTube Download", 
+                              "YouTube downloader is not available. Please install yt-dlp:\n\n"
+                              "pip install yt-dlp requests")
             return
         
-        url, ok = QInputDialog.getText(self, "Download from YouTube", "Enter YouTube URL:")
-        if ok and url:
+            
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Download from YouTube")
+        dialog.setFixedSize(500, 250)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #191414;
+                color: #FFFFFF;
+            }
+            QLabel {
+                color: #FFFFFF;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QLineEdit {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #1DB954;
+            }
+            QPushButton {
+                background-color: #1DB954;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1ed760;
+            }
+            QPushButton#cancelButton {
+                background-color: #404040;
+            }
+            QPushButton#cancelButton:hover {
+                background-color: #606060;
+            }
+        """)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Title
+        title_label = QLabel("🎵 Download Audio from YouTube")
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+        
+        # URL input
+        layout.addWidget(QLabel("YouTube URL:"))
+        url_edit = QLineEdit()
+        url_edit.setPlaceholderText("Paste YouTube video or playlist URL here...")
+        layout.addWidget(url_edit)
+        
+        # Info label
+        info_label = QLabel("• Supports individual videos and playlists\n"
+                           "• Audio will be downloaded as MP3 (192kbps)\n"
+                           "• Channel name will be used as artist")
+        info_label.setStyleSheet("color: #B3B3B3; font-size: 10px; font-weight: normal; margin-top: 10px;")
+        layout.addWidget(info_label)
+        
+        # Warning label
+        warning_label = QLabel("⚠️ Please respect copyright and only download content you have permission to use.")
+        warning_label.setStyleSheet("color: #FF6B6B; font-size: 9px; font-weight: normal;")
+        layout.addWidget(warning_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        download_btn = QPushButton("🎵 Download")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelButton")
+        
+        button_layout.addWidget(download_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        def start_download():
+            url = url_edit.text().strip()
+            if not url:
+                QMessageBox.warning(dialog, "Error", "Please enter a YouTube URL")
+                return
+            
+            if not ("youtube.com" in url or "youtu.be" in url):
+                QMessageBox.warning(dialog, "Error", "Please enter a valid YouTube URL")
+                return
+            
+            # Show what will be downloaded
+            if 'list=' in url and 'v=' in url:
+                video_id = url.split('v=')[1].split('&')[0]
+                clean_url = f"https://www.youtube.com/watch?v={video_id}"
+                
+                reply = QMessageBox.question(dialog, "Playlist URL Detected", 
+                                           f"You entered a playlist URL, but only the individual video will be downloaded.\n\n"
+                                           f"Video ID: {video_id}\n"
+                                           f"Clean URL: {clean_url}\n\n"
+                                           f"Do you want to continue with downloading just this video?",
+                                           QMessageBox.Yes | QMessageBox.No)
+                if reply != QMessageBox.Yes:
+                    return
+            
+            dialog.accept()
             self.start_youtube_download(url)
-    
+        
+        download_btn.clicked.connect(start_download)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        # Focus on URL input and enable Enter key
+        url_edit.setFocus()
+        url_edit.returnPressed.connect(start_download)
+        
+        dialog.exec_()
     def start_youtube_download(self, url):
         """Start YouTube download in background thread"""
         # Create progress dialog
-        progress_dialog = QProgressDialog("Downloading from YouTube...", "Cancel", 0, 100, self)
+        progress_dialog = QProgressDialog("Preparing download...", "Cancel", 0, 100, self)
         progress_dialog.setWindowModality(Qt.WindowModal)
         progress_dialog.setWindowTitle("YouTube Download")
-        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoClose(False)  # Don't auto-close on completion
         progress_dialog.show()
         
         # Start download thread
         self.download_thread = YouTubeDownloadThread(url, self.organizer.musics_folder)
-        self.download_thread.progress.connect(lambda status, percent: self._update_download_progress(progress_dialog, status, percent))
-        self.download_thread.finished.connect(lambda file_path, metadata: self.on_youtube_download_finished(file_path, metadata, progress_dialog))
-        self.download_thread.error.connect(lambda error: self.on_youtube_download_error(error, progress_dialog))
+        
+        # Connect signals directly to thread
+        self.download_thread.progress.connect(
+            lambda status, percent: self._update_download_progress(progress_dialog, status, percent)
+        )
+        self.download_thread.finished.connect(
+            lambda file_path, metadata: self.on_youtube_download_finished(file_path, metadata, progress_dialog)
+        )
+        self.download_thread.error.connect(
+            lambda error: self.on_youtube_download_error(error, progress_dialog)
+        )
+        
+        # Handle cancel
+        def on_cancel():
+            if hasattr(self, 'download_thread') and self.download_thread.isRunning():
+                progress_dialog.setLabelText("Cancelling download...")
+                self.download_thread.terminate()
+                self.download_thread.wait(3000)  # Wait up to 3 seconds
+            progress_dialog.close()
+        
+        progress_dialog.canceled.connect(on_cancel)
+        
+        # Start download
         self.download_thread.start()
     
     def _update_download_progress(self, progress_dialog, status, percent):
         """Update download progress"""
         progress_dialog.setLabelText(status)
         progress_dialog.setValue(int(percent))
-    
     def on_youtube_download_finished(self, file_path, metadata, progress_dialog):
         """Handle YouTube download completion"""
-        progress_dialog.close()
-        if file_path and os.path.exists(file_path):
-            # Add to database
-            try:
-                song_data = extract_metadata(file_path)
-                if song_data:
-                    self.db.add_song(song_data)
-                    QMessageBox.information(self, "Download Complete", f"Successfully downloaded: {song_data['title'] if song_data['title'] else 'Unknown'}")
-                    self.refresh_library()
-                else:
-                    QMessageBox.warning(self, "Download Warning", "File downloaded but metadata extraction failed.")
-            except Exception as e:
-                QMessageBox.critical(self, "Database Error", f"Failed to add song to database: {str(e)}")
-        else:
-            QMessageBox.critical(self, "Download Failed", "Download failed or file not found.")
-    
+        progress_dialog.setLabelText("Adding to library...")
+        progress_dialog.setValue(100)
+        QApplication.processEvents()
+        
+        try:
+            # Verify the file actually exists and is accessible
+            if not os.path.exists(file_path):
+                raise Exception(f"Downloaded file not found: {file_path}")
+            
+            # Check if file is empty or too small
+            file_size = os.path.getsize(file_path)
+            if file_size < 1024:  # Less than 1KB
+                raise Exception(f"Downloaded file is too small ({file_size} bytes)")
+            
+            # Add to database with YouTube metadata
+            song_data = (
+                metadata['title'],
+                metadata['artist'],
+                metadata['album'],
+                metadata['year'],
+                metadata['genre'],
+                metadata['duration'],
+                file_path,
+                metadata['album_art'],
+                metadata['source'],  # 'youtube'
+                metadata.get('youtube_url', ''),
+                metadata.get('youtube_id', '')
+            )
+            
+            if self.db.add_song(song_data):
+                progress_dialog.close()
+                self.refresh_library()
+                
+                # Show success message with file info
+                file_size_mb = file_size / (1024 * 1024)
+                QMessageBox.information(self, "Download Complete", 
+                                    f"Successfully downloaded: {metadata['title']}\n"
+                                    f"By: {metadata['artist']}\n"
+                                    f"File size: {file_size_mb:.1f} MB\n"
+                                    f"Location: {os.path.relpath(file_path, self.organizer.base_path)}\n\n"
+                                    f"Added to library under 'YouTube Downloads'")
+            else:
+                progress_dialog.close()
+                QMessageBox.warning(self, "Error", "Failed to add downloaded song to library")
+                
+        except Exception as e:
+            progress_dialog.close()
+            error_msg = f"Error processing downloaded file: {str(e)}"
+            print(f"❌ {error_msg}")
+            
+            # Show detailed error with troubleshooting tips
+            QMessageBox.critical(self, "Download Processing Error", 
+                            f"{error_msg}\n\n"
+                            f"Troubleshooting:\n"
+                            f"• Check if the file exists in the YouTube Downloads folder\n"
+                            f"• Verify the file isn't corrupted or empty\n"
+                            f"• Try downloading the video again\n"
+                            f"• Check available disk space")
     def on_youtube_download_error(self, error, progress_dialog):
         """Handle YouTube download error"""
         progress_dialog.close()
-        QMessageBox.critical(self, "Download Error", f"Download failed: {error}")
+        QMessageBox.critical(self, "Download Failed", 
+                       f"YouTube download failed:\n\n{error}\n\n"
+                       f"Common issues:\n"
+                       f"• Video may be private or unavailable\n"
+                       f"• Network connection problems\n"
+                       f"• Geographic restrictions\n"
+                       f"• yt-dlp needs to be updated")
     
     # Playlist management
     def create_playlist_dialog(self):
@@ -760,23 +948,27 @@ class LocalSpotifyQt(QMainWindow):
 
     def refresh_playlists(self):
         """Refresh the playlists display"""
-        try:
-            playlists = self.db.get_playlists()
-            self.playlist_list.clear()
-            for playlist in playlists:
-                # playlist is a tuple: (id, name, description, created_date)
-                # Access by index, not by key
-                playlist_id = playlist[0] if len(playlist) > 0 else 0
-                playlist_name = str(playlist[1]) if len(playlist) > 1 else "Unknown Playlist"
-                playlist_description = str(playlist[2]) if len(playlist) > 2 else ""
-                
-                item = QListWidgetItem(playlist_name)
-                item.setData(Qt.UserRole, playlist_id)
-                item.setToolTip(playlist_description if playlist_description else f"Playlist: {playlist_name}")
-                self.playlist_list.addItem(item)
-            print(f"✅ Loaded {len(playlists)} playlists")
-        except Exception as e:
-            print(f"❌ Error refreshing playlists: {e}")
+        self.playlist_list.clear()
+        playlists = self.db.get_playlists()
+        
+        for playlist in playlists:
+            # Debug: Check how many values we're getting
+            print(f"Playlist data length: {len(playlist)}, data: {playlist}")
+            
+            # Handle different playlist data formats safely
+            if len(playlist) >= 4:
+                playlist_id, name, description, created_date = playlist[:4]
+            elif len(playlist) >= 2:
+                playlist_id, name = playlist[:2]
+                description = ""
+            else:
+                print(f"❌ Invalid playlist data: {playlist}")
+                continue
+            
+            item = QListWidgetItem(f"📝 {name}")
+            item.setData(Qt.UserRole, playlist_id)
+            item.setToolTip(description if description else f"Playlist: {name}")
+            self.playlist_list.addItem(item)
     
     def show_library(self):
         """Show the main library view"""

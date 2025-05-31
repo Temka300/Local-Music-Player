@@ -1,5 +1,6 @@
 # Music Player Project .gitignore
 
+.gitignore
 # Python bytecode and cache
 __pycache__/
 *.py[cod]
@@ -93,6 +94,7 @@ user_preferences.json
 # Unnecessary python files
 test_table_styling.py
 local_spotify_tk.py
+local_spotify.py
 
 # Temporary files
 *.tmp
@@ -172,3 +174,4 @@ node_modules/
 # Runtime created folders
 cache/
 .cache/
+local_spotify.py

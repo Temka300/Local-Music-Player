@@ -8,7 +8,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
 try:
-    from youtube_downloader import YouTubeDownloadThread
+    from core.youtube_downloader import YouTubeDownloadThread
     YOUTUBE_AVAILABLE = True
 except ImportError:
     YOUTUBE_AVAILABLE = False

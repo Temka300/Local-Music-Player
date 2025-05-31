@@ -33,7 +33,7 @@ REPEAT_ALL = "all"
 
 # Application info
 APP_NAME = "Local Spotify"
-APP_VERSION = "0.14"
+APP_VERSION = "0.20"
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -98,7 +98,7 @@ def get_app_dirs():
 
 # YouTube availability check
 try:
-    from youtube_downloader import YouTubeDownloader, YouTubeDownloadThread
+    from core.youtube_downloader import YouTubeDownloader, YouTubeDownloadThread
     YOUTUBE_AVAILABLE = True
     print("✅ YouTube downloader available")
 except ImportError:

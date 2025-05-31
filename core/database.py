@@ -215,16 +215,22 @@ class MusicDatabase:
             return None
         finally:
             conn.close()
-    
+        
     def get_playlists(self):
         """Get all playlists"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('SELECT * FROM playlists ORDER BY name')
-        playlists = cursor.fetchall()
-        conn.close()
-        return playlists
+        try:
+            cursor.execute('SELECT id, name, description, created_date FROM playlists ORDER BY name')
+            playlists = cursor.fetchall()
+            print(f"📝 Found {len(playlists)} playlists")
+            return playlists
+        except Exception as e:
+            print(f"❌ Error getting playlists: {e}")
+            return []
+        finally:
+            conn.close()
     
     def add_song_to_playlist(self, playlist_id, song_id):
         """Add a song to a playlist"""
