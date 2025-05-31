@@ -203,13 +203,29 @@ class LocalSpotifyQt(QMainWindow):
         self.music_table.setColumnCount(4)
         self.music_table.setHorizontalHeaderLabels(['Title', 'Artist', 'Album', 'Duration'])
         
-        # Configure table
+        # Configure table header for draggable resizing
         header = self.music_table.horizontalHeader()
+        
+        # Enable manual resize mode for all columns
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        
+        # Set minimum column widths
+        header.setMinimumSectionSize(80)
+        
+        # Set initial column widths
+        header.resizeSection(0, 300)  # Title - wider
+        header.resizeSection(1, 150)  # Artist
+        header.resizeSection(2, 150)  # Album
+        header.resizeSection(3, 80)   # Duration - narrower
+        
+        # Make the last section (Duration) stretch to fill remaining space
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        
+        # Enable drag and drop for column reordering (optional)
+        header.setSectionsMovable(True)
+        
+        # Show resize cursor when hovering over column borders
+        header.setCursor(Qt.SplitHCursor)
         
         self.music_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.music_table.setSelectionMode(QAbstractItemView.SingleSelection)
