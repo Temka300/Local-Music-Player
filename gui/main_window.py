@@ -228,7 +228,8 @@ class LocalSpotifyQt(QMainWindow):
         header.setCursor(Qt.SplitHCursor)
         
         self.music_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.music_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        # Change selection mode to allow multiple selections
+        self.music_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.music_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.music_table.setAlternatingRowColors(False)
         
@@ -1100,49 +1101,193 @@ class LocalSpotifyQt(QMainWindow):
     def show_context_menu(self, position):
         """Show context menu for table items"""
         item = self.music_table.itemAt(position)
-        if item:
-            menu = QMenu(self)
-            
-            play_action = QAction("Play", self)
-            play_action.triggered.connect(lambda: self.on_song_double_click(item.row(), 0))
+        if not item:
+            return
+        
+        # Get selected rows
+        selected_rows = list(set(index.row() for index in self.music_table.selectedIndexes()))
+        if not selected_rows:
+            return
+        
+        menu = QMenu(self)
+        
+        # Play action (only show for single selection)
+        if len(selected_rows) == 1:
+            play_action = QAction("▶ Play", self)
+            play_action.triggered.connect(lambda: self.on_song_double_click(selected_rows[0], 0))
             menu.addAction(play_action)
-            
             menu.addSeparator()
+        
+        # Add to playlist submenu
+        add_to_playlist_menu = menu.addMenu("📝 Add to Playlist")
+        
+        # Get all playlists
+        playlists = self.db.get_playlists()
+        
+        if playlists:
+            for playlist in playlists:
+                playlist_id = playlist[0]
+                playlist_name = playlist[1] if len(playlist) > 1 else "Unknown Playlist"
+                
+                playlist_action = QAction(playlist_name, self)
+                playlist_action.triggered.connect(
+                    lambda checked, pid=playlist_id, name=playlist_name: 
+                    self.add_selected_to_playlist(selected_rows, pid, name)
+                )
+                add_to_playlist_menu.addAction(playlist_action)
+        else:
+            no_playlists_action = QAction("No playlists available", self)
+            no_playlists_action.setEnabled(False)
+            add_to_playlist_menu.addAction(no_playlists_action)
+        
+        add_to_playlist_menu.addSeparator()
+        
+        # Create new playlist option
+        create_playlist_action = QAction("➕ Create New Playlist", self)
+        create_playlist_action.triggered.connect(
+            lambda: self.create_playlist_and_add_songs(selected_rows)
+        )
+        add_to_playlist_menu.addAction(create_playlist_action)
+        
+        menu.addSeparator()
+        
+        # Remove from library action
+        remove_text = f"🗑 Remove from Library ({len(selected_rows)} song{'s' if len(selected_rows) > 1 else ''})"
+        remove_action = QAction(remove_text, self)
+        remove_action.triggered.connect(lambda: self.remove_selected_songs(selected_rows))
+        menu.addAction(remove_action)
+        
+        menu.exec_(self.music_table.mapToGlobal(position))
+    
+    def add_selected_to_playlist(self, selected_rows, playlist_id, playlist_name):
+        """Add selected songs to a playlist"""
+        try:
+            added_count = 0
+            failed_count = 0
             
-            remove_action = QAction("Remove from Library", self)
-            remove_action.triggered.connect(self.remove_selected_song)
-            menu.addAction(remove_action)
+            for row in selected_rows:
+                title_item = self.music_table.item(row, 0)
+                if title_item:
+                    song_data = title_item.data(Qt.UserRole)
+                    if song_data:
+                        song_id = song_data[0] if len(song_data) > 0 else 0
+                        try:
+                            self.db.add_song_to_playlist(playlist_id, song_id)
+                            added_count += 1
+                        except Exception as e:
+                            print(f"❌ Failed to add song {song_id} to playlist: {e}")
+                            failed_count += 1
             
-            menu.exec_(self.music_table.mapToGlobal(position))
-    def remove_selected_song(self):
-        """Remove selected song from library"""
-        current_row = self.music_table.currentRow()
-        if current_row >= 0:
-            title_item = self.music_table.item(current_row, 0)
+            # Show result message
+            if added_count > 0:
+                message = f"Added {added_count} song{'s' if added_count > 1 else ''} to '{playlist_name}'"
+                if failed_count > 0:
+                    message += f" ({failed_count} failed)"
+                QMessageBox.information(self, "Added to Playlist", message)
+            elif failed_count > 0:
+                QMessageBox.warning(self, "Error", f"Failed to add {failed_count} song{'s' if failed_count > 1 else ''} to playlist")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to add songs to playlist: {str(e)}")
+    
+    def create_playlist_and_add_songs(self, selected_rows):
+        """Create a new playlist and add selected songs to it"""
+        # Get playlist name
+        name, ok = QInputDialog.getText(self, "Create Playlist", "Enter playlist name:")
+        if not ok or not name.strip():
+            return
+        
+        # Get playlist description
+        description, ok = QInputDialog.getText(self, "Create Playlist", "Enter playlist description (optional):")
+        if not ok:
+            description = ""
+        
+        try:
+            # Create the playlist
+            playlist_id = self.db.create_playlist(name.strip(), description.strip())
+            
+            if playlist_id:
+                # Add songs to the new playlist
+                self.add_selected_to_playlist(selected_rows, playlist_id, name.strip())
+                
+                # Refresh playlists list
+                self.refresh_playlists()
+            else:
+                QMessageBox.critical(self, "Error", "Failed to create playlist")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create playlist: {str(e)}")
+    
+    def remove_selected_songs(self, selected_rows):
+        """Remove selected songs from library"""
+        if not selected_rows:
+            return
+        
+        # Get song titles for confirmation
+        song_titles = []
+        song_ids = []
+        
+        for row in selected_rows:
+            title_item = self.music_table.item(row, 0)
             if title_item:
                 song_data = title_item.data(Qt.UserRole)
                 if song_data:
-                    # song_data is a tuple: (id, title, artist, album, ...)
-                    # Access by index, not by key
                     song_id = song_data[0] if len(song_data) > 0 else 0
                     title = str(song_data[1]) if len(song_data) > 1 else "Unknown"
+                    song_ids.append(song_id)
+                    song_titles.append(title)
+        
+        if not song_ids:
+            return
+        
+        # Confirmation dialog
+        if len(song_titles) == 1:
+            message = f"Are you sure you want to remove '{song_titles[0]}' from the library?"
+        else:
+            message = f"Are you sure you want to remove {len(song_titles)} songs from the library?\n\nSongs:\n"
+            # Show first few titles
+            shown_titles = song_titles[:5]
+            message += "\n".join(f"• {title}" for title in shown_titles)
+            if len(song_titles) > 5:
+                message += f"\n... and {len(song_titles) - 5} more"
+        
+        reply = QMessageBox.question(
+            self, 
+            "Remove Songs", 
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                removed_count = 0
+                for song_id in song_ids:
+                    if self.db.remove_song(song_id):
+                        removed_count += 1
+                
+                self.refresh_library()
+                
+                if removed_count > 0:
+                    QMessageBox.information(self, "Songs Removed", 
+                                          f"Successfully removed {removed_count} song{'s' if removed_count > 1 else ''} from library!")
+                else:
+                    QMessageBox.warning(self, "Error", "No songs were removed")
                     
-                    reply = QMessageBox.question(
-                        self, 
-                        "Remove Song", 
-                        f"Are you sure you want to remove '{title}' from the library?",
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.No
-                    )
-                    
-                    if reply == QMessageBox.Yes:
-                        try:
-                            self.db.remove_song(song_id)
-                            self.refresh_library()
-                            QMessageBox.information(self, "Song Removed", "Song removed from library successfully!")
-                        except Exception as e:
-                            QMessageBox.critical(self, "Error", f"Failed to remove song: {str(e)}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to remove songs: {str(e)}")
     
+    def remove_selected_song(self):
+        """Remove selected song from library (legacy method - now uses remove_selected_songs)"""
+        selected_rows = list(set(index.row() for index in self.music_table.selectedIndexes()))
+        if selected_rows:
+            self.remove_selected_songs(selected_rows)
+        else:
+            # Fallback to current row if no selection
+            current_row = self.music_table.currentRow()
+            if current_row >= 0:
+                self.remove_selected_songs([current_row])
+
     def on_table_item_changed(self, item):
         """Handle table item changes for inline editing"""
         try:

@@ -1,4 +1,220 @@
-Need to update this
+# Local Spotify Qt
+
+A modern, feature-rich local music player with a sleek dark interface inspired by Spotify. Built with PyQt5 and powered by VLC for high-quality audio playback.
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.7%2B-brightgreen.svg)
+![PyQt5](https://img.shields.io/badge/GUI-PyQt5-orange.svg)
+
+## ✨ Features
+
+### 🎵 Audio Playback
+- **Advanced VLC Engine**: Enhanced audio quality with VLC backend and Qt MediaPlayer fallback
+- **Multi-format Support**: MP3, WAV, FLAC, M4A, and more
+- **High-Quality Audio**: Professional-grade audio processing
+- **Gapless Playback**: Seamless transitions between tracks
+
+### 🎨 Modern Interface
+- **Spotify-inspired Design**: Dark theme with modern aesthetics
+- **Album Art Display**: Beautiful cover art integration
+- **Responsive Layout**: Intuitive and user-friendly interface
+- **Real-time Visualization**: Progress tracking and waveform display
+
+### 📚 Library Management
+- **SQLite Database**: Fast and reliable music library organization
+- **Metadata Extraction**: Automatic title, artist, album, and genre detection
+- **Smart Search**: Quick filtering and search capabilities
+- **Custom Organization**: Flexible library structure
+
+### 🎵 Playlist Features
+- **Custom Playlists**: Create and manage unlimited playlists
+- **Shuffle & Repeat**: Multiple playback modes
+- **Queue Management**: Dynamic playlist manipulation
+- **Smart Recommendations**: AI-powered song suggestions
+
+### 📥 YouTube Integration
+- **YouTube Downloader**: Built-in yt-dlp integration for audio downloads
+- **Automatic Conversion**: Convert downloaded audio to preferred formats
+- **Metadata Preservation**: Maintain track information during download
+
+### 🔧 Advanced Features
+- **Audio Conversion**: M4A to MP3 conversion with pydub
+- **Volume Control**: Precise audio level management
+- **Keyboard Shortcuts**: Efficient navigation and control
+- **Cross-platform**: Windows, macOS, and Linux support
+
+## 🚀 Installation
+
+### Prerequisites
+- Python 3.7 or higher
+- VLC Media Player (for enhanced audio support)
+
+### Quick Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/Local-Music-Player.git
+   cd Local-Music-Player
+   ```
+
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install VLC (recommended)**
+   - **Windows**: Download from [VLC website](https://www.videolan.org/vlc/)
+   - **macOS**: `brew install vlc` or download from website
+   - **Linux**: `sudo apt install vlc` (Ubuntu/Debian) or `sudo dnf install vlc` (Fedora)
+
+4. **Run the application**
+   ```bash
+   python main.py
+   ```
+
+## 📦 Dependencies
+
+### Core Dependencies
+- **PyQt5** (≥5.15.0) - Modern GUI framework
+- **mutagen** (≥1.47.0) - Audio metadata extraction
+- **Pillow** (≥10.0.0) - Image processing for album art
+- **pydub** (≥0.25.1) - Audio format conversion
+
+### Optional Dependencies
+- **python-vlc** - Enhanced VLC audio engine support
+- **yt-dlp** - YouTube audio download functionality
+- **requests** - Web-based features and updates
+
+### System Requirements
+- **VLC Media Player** - For optimal audio quality (falls back to Qt MediaPlayer)
+- **FFmpeg** - For advanced audio processing (optional)
+
+## 🎯 Usage
+
+### Getting Started
+1. **Add Music**: Use File → Add Music or drag & drop music files/folders
+2. **Create Playlists**: Right-click to create custom playlists
+3. **Search Library**: Use the search bar to find specific tracks
+4. **Download from YouTube**: Use the built-in downloader for new music
+
+### Keyboard Shortcuts
+- `Space` - Play/Pause
+- `→` - Next track
+- `←` - Previous track
+- `↑/↓` - Volume control
+- `Ctrl+S` - Shuffle toggle
+- `Ctrl+R` - Repeat toggle
+- `Ctrl+F` - Focus search
+
+### Supported Formats
+- **Audio**: MP3, WAV, FLAC, M4A, AAC, OGG
+- **Playlists**: M3U, PLS (import/export)
+- **Images**: JPEG, PNG, BMP (album art)
+
+## 📁 Project Structure
+
+```
+Local-Music-Player/
+├── main.py                    # Application entry point
+├── requirements.txt           # Python dependencies
+│
+├── core/                      # Core functionality
+│   ├── __init__.py
+│   ├── audio_player.py       # VLC/Qt audio engine
+│   ├── database.py           # SQLite music library
+│   ├── youtube_downloader.py # yt-dlp integration
+│   └── playlist_manager.py   # Playlist operations
+│
+├── gui/                       # PyQt5 interface components
+│   ├── __init__.py
+│   ├── main_window.py        # Main application window
+│   ├── dialogs/              # Dialog windows
+│   │   ├── add_music_dialog.py
+│   │   ├── playlist_dialog.py
+│   │   └── settings_dialog.py
+│   └── widgets/              # Custom widgets
+│       ├── player_controls.py
+│       ├── library_view.py
+│       └── progress_bar.py
+│
+├── utils/                     # Utility modules
+│   ├── __init__.py
+│   ├── constants.py          # Application constants
+│   ├── file_utils.py         # File management
+│   └── metadata_utils.py     # Audio metadata handling
+│
+├── workers/                   # Background processing
+│   ├── __init__.py
+│   ├── download_worker.py    # YouTube download threads
+│   └── scan_worker.py        # Library scanning threads
+│
+└── assets/                    # Application resources
+    ├── icons/                # UI icons
+    ├── styles/               # CSS stylesheets
+    └── themes/               # Color themes
+```
+
+## 🔧 Configuration
+
+### Settings Location
+- **Windows**: `%APPDATA%/Local Spotify Qt/`
+- **macOS**: `~/Library/Application Support/Local Spotify Qt/`
+- **Linux**: `~/.config/Local Spotify Qt/`
+
+### Database
+- SQLite database automatically created at first run
+- Stores music metadata, playlists, and user preferences
+- Automatic backup and recovery features
+
+## 🤝 Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Development Setup
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and test thoroughly
+4. Submit a pull request with a clear description
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+**Audio not playing?**
+- Ensure VLC is installed and accessible
+- Check if audio files are in supported formats
+- Verify system audio drivers
+
+**YouTube downloads failing?**
+- Update yt-dlp: `pip install --upgrade yt-dlp`
+- Check internet connection
+- Some videos may be region-restricted
+
+**Library not updating?**
+- Restart the application
+- Check file permissions in music directories
+- Use "Refresh Library" in the File menu
+
+### Getting Help
+- 🐛 [Report bugs](https://github.com/yourusername/Local-Music-Player/issues)
+- 💡 [Request features](https://github.com/yourusername/Local-Music-Player/discussions)
+- 📖 [Check documentation](https://github.com/yourusername/Local-Music-Player/wiki)
+
+## 🙏 Acknowledgments
+
+- **VLC Media Player** - For excellent audio engine
+- **Spotify** - For design inspiration
+- **PyQt5** - For robust GUI framework
+- **yt-dlp** - For YouTube integration
+- **Contributors** - For making this project better
+
+---
+
+⭐ **Star this repository if you find it useful!**
 # 🎵 Local Spotify - Music Player for Local Files
 
 A comprehensive, Spotify-like music player for your local music collection. Built with Python and featuring a modern dark theme interface, complete music library management, and robust audio playback with advanced error handling.
@@ -110,7 +326,6 @@ python local_spotify.py
 - **pygame**: Audio playback engine
 - **mutagen**: Metadata extraction from audio files
 - **Pillow**: Image processing for album art
-- **tkinter**: GUI framework (included with Python)
 - **sqlite3**: Database for library management (included with Python)
 
 Install all dependencies with:
